@@ -1,6 +1,6 @@
 # Alzando Authorization Service
 
-Initial feature slice: application-scoped RBAC APIs for creating roles and permissions, assigning permissions to roles, assigning roles to application users, and checking authorization.
+Current foundation: confidential application clients, application registration and service configuration, and application-scoped RBAC. Authentication workflows are planned as later feature slices.
 
 ## Architecture and environments
 
@@ -32,7 +32,7 @@ flowchart TB
         GATEWAY[HTTPS gateway]
         PAPI[Containerized API]
         PDB[(Managed PostgreSQL)]
-        PIDENTITY[Trusted client identity verifier<br/>Mechanism to be selected]
+        PIDENTITY[OAuth 2.0 client credentials<br/>RS256 access tokens]
         SECRETS[Secrets manager]
         OBS[Logs · metrics · traces]
         PCLIENT --> GATEWAY --> PAPI
@@ -52,7 +52,7 @@ flowchart TB
 - PostgreSQL 16, SQLAlchemy, and Alembic migrations
 - Docker Compose for a local API and database
 
-Development uses PostgreSQL to match the production database family. Confidential back-end applications authenticate with OAuth 2.0 client credentials. The service issues short-lived RS256 access tokens and derives the application identity and granted scopes from validated token claims. In development only, `X-Dev-Application-Id` remains available for quick API exploration. Production ignores that header. Public browser and mobile clients must not use client secrets; a separate public-client flow is a later feature.
+Development uses PostgreSQL to match the production database family. Confidential back-end applications authenticate with OAuth 2.0 client credentials. The service issues short-lived RS256 access tokens and derives the application identity and granted scopes from validated token claims. In development only, `X-Dev-Application-Id` remains available for quick API exploration. Production ignores that header. Public clients can be registered without a secret; their login/token flow is a later feature.
 
 ## Start the development stack
 
@@ -67,34 +67,65 @@ The API is available at `http://localhost:8000`; interactive API docs are at `ht
 For local API calls, include a development-only application context header:
 
 ```http
-X-Dev-Application-Id: app_local
+X-Dev-Application-Id: <registered_application_id>
 ```
 
-Do not use development credentials or this header in production.
+Register the application first; the migration preserves older `app_local` development data if present. Do not use development credentials or this header in production.
 
-To provision a confidential client locally, open another VS Code terminal in the repository and run:
+In development, register an application with the development-only platform identity:
 
 ```powershell
-docker compose exec api python -m alzando_authorization.cli create-client --application-id app_local --scope authorization:manage --scope authorization:check
+$operatorHeaders = @{ "X-Dev-Application-Id" = "alzando_platform" }
+$registration = @{
+  name = "SkillFlow"
+  description = "Learning platform"
+  application_type = "ALZANDO_OWNED"
+  owner = @{ organization = "Alzando" }
+  client_type = "CONFIDENTIAL"
+  configuration = @{ enabled_services = @("AUTHORIZATION") }
+} | ConvertTo-Json -Depth 5
+$app = Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/v1/applications -Headers $operatorHeaders -ContentType "application/json" -Body $registration
+$app.data
 ```
 
-The command prints the `client_id` and `client_secret` once. Save the secret securely; the database stores only its Argon2 hash. The command provisions clients out of band; there is no public client-registration endpoint.
+The response includes an Alzando-generated application ID, client ID, and (for confidential clients) a client secret shown once. Save the secret securely; PostgreSQL stores only its Argon2 hash. The initial application client receives `authorization:check` only, and only when Authorization is enabled.
 
-Request a token from PowerShell, replacing the values with the CLI output:
+In production, application registration and service configuration require a platform-operator client. Provision one from the trusted deployment environment:
+
+```powershell
+docker compose exec api python -m alzando_authorization.cli create-platform-admin
+```
+
+This privileged client is assigned to the reserved `alzando_platform` context and receives only `platform:manage`. Exchange its credentials at `/oauth2/token` with `scope=platform:manage`, then send its Bearer token to registry/configuration APIs. Do not expose its secret to consuming applications. In local development, use the `X-Dev-Application-Id: alzando_platform` shortcut shown above.
+
+Provision a separate application-scoped client for RBAC administration when needed. Replace `<application_id>` with the ID returned by registration:
+
+```powershell
+docker compose exec api python -m alzando_authorization.cli create-client --application-id YOUR_APPLICATION_ID --scope authorization:manage --scope authorization:check
+```
+
+Keep the management client credentials on trusted backend/admin infrastructure. Do not give `authorization:manage` to an ordinary application runtime client unless that runtime must administer roles.
+
+Request an application token from PowerShell, replacing the values with its registration output:
 
 ```powershell
 $pair = "CLIENT_ID:CLIENT_SECRET"
 $basic = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($pair))
-$tokenResponse = Invoke-RestMethod -Method Post -Uri http://localhost:8000/oauth2/token -Headers @{ Authorization = "Basic $basic" } -ContentType "application/x-www-form-urlencoded" -Body @{ grant_type = "client_credentials"; scope = "authorization:manage authorization:check" }
+$tokenResponse = Invoke-RestMethod -Method Post -Uri http://localhost:8000/oauth2/token -Headers @{ Authorization = "Basic $basic" } -ContentType "application/x-www-form-urlencoded" -Body @{ grant_type = "client_credentials"; scope = "authorization:check" }
 $token = $tokenResponse.access_token
 ```
 
-Send `Authorization: Bearer $token` with API calls. Role, permission, and assignment endpoints require `authorization:manage`; the decision endpoint requires `authorization:check`. In development the header shortcut above remains available.
+Send `Authorization: Bearer $token` with API calls. Role, permission, and assignment endpoints require `authorization:manage`; the decision endpoint requires `authorization:check`. Tokens for Authorization are rejected while that service is disabled for the application.
 
 ## Implemented API surface
 
 | Method | Path | Purpose |
 |---|---|---|
+| `POST` | `/api/v1/applications` | Register an application and its initial client |
+| `GET` | `/api/v1/applications/{application_id}` | Retrieve application, client metadata, and service configuration |
+| `PATCH` | `/api/v1/applications/{application_id}` | Update application name, description, owner, or status |
+| `GET` | `/api/v1/services` | List the service catalogue |
+| `PUT` | `/api/v1/applications/{application_id}/services` | Replace application service configuration |
 | `POST` | `/api/v1/authorization/roles` | Create an application-scoped role |
 | `POST` | `/api/v1/authorization/permissions` | Create an application-scoped permission |
 | `PUT` | `/api/v1/authorization/roles/{role_id}/permissions` | Replace a role's complete permission set |
@@ -102,14 +133,14 @@ Send `Authorization: Bearer $token` with API calls. Role, permission, and assign
 | `POST` | `/api/v1/authorization/check` | Return an `ALLOWED` or `DENIED` RBAC decision |
 | `POST` | `/oauth2/token` | Issue a short-lived access token to a confidential client |
 
-All five operations scope their queries to the authenticated application. Relationship tables also use composite foreign keys to prevent cross-application role and permission links. Empty arrays on either `PUT` endpoint clear the corresponding assignments. Resource context is accepted and echoed, but V1 does not evaluate ownership or resource-level rules.
+Application registry and service-configuration APIs require `platform:manage`. Authorization APIs require the Authorization service to be enabled for the registered application and enforce application scopes. Relationship tables use composite foreign keys to prevent cross-application role and permission links. Empty arrays on either RBAC relationship `PUT` endpoint clear assignments. Resource context is accepted and echoed, but V1 does not evaluate ownership or resource-level rules.
 
 ## Production deployment requirements
 
 - Set `TOKEN_ISSUER`, `TOKEN_AUDIENCE`, and `JWT_PRIVATE_KEY_FILE` to production values. Mount the signing key from a secret manager; never commit it to Git. `JWT_PUBLIC_KEY_FILE` can supply the verification key separately.
 - Use managed PostgreSQL, secret storage, TLS, and operational monitoring.
-- Per-application Authorization service enablement enforcement once integrated with Alzando's application configuration service.
-- Public-client authentication and delegated user flows are not part of this client-credentials feature.
+- Public-client authentication, signup/login, verification, recovery, OTP, MFA, passkeys, social login, application-user tokens, and audit-event APIs remain planned feature slices.
+- The accepted application-type values and detailed per-service configuration schemas are initial V1 choices and should be reviewed against product requirements.
 
 ## API response envelope
 

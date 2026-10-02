@@ -83,7 +83,57 @@ class ApplicationClient(Base):
 
     client_id: Mapped[str] = mapped_column(String(96), primary_key=True)
     application_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-    client_secret_hash: Mapped[str] = mapped_column(String(256), nullable=False)
+    client_secret_hash: Mapped[str | None] = mapped_column(String(256))
+    client_type: Mapped[str] = mapped_column(String(24), nullable=False, default="CONFIDENTIAL")
     scopes: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class Application(Base):
+    __tablename__ = "applications"
+
+    application_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(1000))
+    application_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    owner: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="ACTIVE")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+
+class Service(Base):
+    __tablename__ = "services"
+
+    service_code: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str] = mapped_column(String(500), nullable=False)
+    service_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="ACTIVE")
+
+
+class ApplicationService(Base):
+    __tablename__ = "application_services"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["application_id"], ["applications.application_id"],
+            ondelete="CASCADE", name="fk_application_services_application",
+        ),
+        ForeignKeyConstraint(
+            ["service_code"], ["services.service_code"],
+            ondelete="RESTRICT", name="fk_application_services_service",
+        ),
+        Index("ix_application_services_service", "service_code"),
+    )
+
+    application_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    service_code: Mapped[str] = mapped_column(String(64), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    configuration: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
