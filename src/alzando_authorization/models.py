@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKeyConstraint, Index, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKeyConstraint, Index, JSON, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
@@ -76,3 +76,14 @@ class UserRole(Base):
     application_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     user_reference: Mapped[str] = mapped_column(String(200), primary_key=True)
     role_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+
+
+class ApplicationClient(Base):
+    __tablename__ = "application_clients"
+
+    client_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    application_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    client_secret_hash: Mapped[str] = mapped_column(String(256), nullable=False)
+    scopes: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
