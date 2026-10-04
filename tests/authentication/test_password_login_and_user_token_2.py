@@ -3,8 +3,8 @@
 Create an active account, authenticate by password, exchange the resulting
 one-time authentication reference, and decode the RS256 JWT. The token should
 identify as a user access token and report only `pwd` in its authentication
-methods. Reusing the grant should be rejected. The AMR assertion currently
-fails because password-only authentication is marked as OTP/MFA too.
+methods. Reusing the grant should be rejected, and the AMR claim should be
+accurate for password-only authentication.
 """
 
 import jwt

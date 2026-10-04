@@ -2,9 +2,7 @@
 
 Enable Signup and Email Verification, submit a valid registration, and stub
 the challenge creator to return a delivery payload. The API should return
-VERIFICATION_REQUIRED and enqueue that payload for the email sender. This
-regression assertion currently fails: the signup service returns a `deliveries`
-list while the route checks for one `delivery` item.
+VERIFICATION_REQUIRED and enqueue that payload for the email sender.
 """
 
 from alzando_authorization import authentication, main as main_module
