@@ -137,3 +137,131 @@ class ApplicationService(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
     )
+
+
+class AuthenticationAccount(Base):
+    __tablename__ = "authentication_accounts"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["application_id"], ["applications.application_id"],
+            ondelete="CASCADE", name="fk_authentication_accounts_application",
+        ),
+        UniqueConstraint("application_id", "email", name="uq_authentication_accounts_application_email"),
+        UniqueConstraint("application_id", "phone", name="uq_authentication_accounts_application_phone"),
+        Index("ix_authentication_accounts_application_status", "application_id", "status"),
+    )
+
+    application_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    account_reference: Mapped[str] = mapped_column(String(96), primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    phone: Mapped[str | None] = mapped_column(String(32))
+    display_name: Mapped[str | None] = mapped_column(String(200))
+    password_hash: Mapped[str] = mapped_column(String(256), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
+    email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    phone_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    failed_login_attempts: Mapped[int] = mapped_column(nullable=False, default=0)
+    recovery_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+
+class PasswordRecoveryChallenge(Base):
+    __tablename__ = "password_recovery_challenges"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["application_id", "account_reference"],
+            ["authentication_accounts.application_id", "authentication_accounts.account_reference"],
+            ondelete="CASCADE", name="fk_password_recovery_challenges_account",
+        ),
+        Index(
+            "ix_password_recovery_challenges_account_created",
+            "application_id", "account_reference", "created_at",
+        ),
+    )
+
+    application_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    recovery_reference: Mapped[str] = mapped_column(String(96), primary_key=True)
+    account_reference: Mapped[str] = mapped_column(String(96), nullable=False)
+    code_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failed_attempts: Mapped[int] = mapped_column(nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class EmailVerificationChallenge(Base):
+    __tablename__ = "email_verification_challenges"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["application_id", "account_reference"],
+            ["authentication_accounts.application_id", "authentication_accounts.account_reference"],
+            ondelete="CASCADE", name="fk_email_verification_challenges_account",
+        ),
+        Index(
+            "ix_email_verification_challenges_account_created",
+            "application_id", "account_reference", "created_at",
+        ),
+    )
+
+    application_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    verification_reference: Mapped[str] = mapped_column(String(96), primary_key=True)
+    account_reference: Mapped[str] = mapped_column(String(96), nullable=False)
+    code_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failed_attempts: Mapped[int] = mapped_column(nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class PhoneVerificationChallenge(Base):
+    __tablename__ = "phone_verification_challenges"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["application_id", "account_reference"],
+            ["authentication_accounts.application_id", "authentication_accounts.account_reference"],
+            ondelete="CASCADE", name="fk_phone_verification_challenges_account",
+        ),
+        Index(
+            "ix_phone_verification_challenges_account_created",
+            "application_id", "account_reference", "created_at",
+        ),
+    )
+
+    application_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    verification_reference: Mapped[str] = mapped_column(String(96), primary_key=True)
+    account_reference: Mapped[str] = mapped_column(String(96), nullable=False)
+    code_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failed_attempts: Mapped[int] = mapped_column(nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class OtpChallenge(Base):
+    __tablename__ = "otp_challenges"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["application_id", "account_reference"],
+            ["authentication_accounts.application_id", "authentication_accounts.account_reference"],
+            ondelete="CASCADE", name="fk_otp_challenges_account",
+        ),
+        Index(
+            "ix_otp_challenges_subject_created",
+            "application_id", "subject_reference", "purpose", "channel", "created_at",
+        ),
+    )
+
+    application_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    challenge_reference: Mapped[str] = mapped_column(String(96), primary_key=True)
+    subject_reference: Mapped[str] = mapped_column(String(96), nullable=False)
+    account_reference: Mapped[str | None] = mapped_column(String(96))
+    purpose: Mapped[str] = mapped_column(String(24), nullable=False)
+    channel: Mapped[str] = mapped_column(String(16), nullable=False)
+    code_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failed_attempts: Mapped[int] = mapped_column(nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)

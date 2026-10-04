@@ -39,7 +39,19 @@ def register_application(db: Session, request: RegisterApplication) -> tuple[App
         ))
 
     # Service configuration is enforced when a token is issued and again on API calls.
-    client_scopes = ["authorization:check"]
+    client_scopes = []
+    if "AUTHORIZATION" in requested:
+        client_scopes.append("authorization:check")
+    if "SIGNUP" in requested:
+        client_scopes.append("authentication:signup")
+    if "LOGIN" in requested:
+        client_scopes.append("authentication:login")
+    if "PASSWORD_RECOVERY" in requested:
+        client_scopes.append("authentication:recovery")
+    if "EMAIL_VERIFICATION" in requested:
+        client_scopes.append("authentication:verify")
+    if "PHONE_VERIFICATION" in requested:
+        client_scopes.append("authentication:verify_phone")
     client, client_secret = add_application_client(
         db, application.application_id, client_scopes, request.client_type
     )

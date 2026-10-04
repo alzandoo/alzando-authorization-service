@@ -20,6 +20,17 @@ services:
     environment:
       APP_ENV: development
       DATABASE_URL: postgresql+psycopg://alzando:alzando_dev@db:5432/alzando_authz
+      CHALLENGE_HMAC_SECRET: ${CHALLENGE_HMAC_SECRET:-}
+      PASSWORD_RECOVERY_TTL_SECONDS: ${PASSWORD_RECOVERY_TTL_SECONDS:-300}
+      PASSWORD_RECOVERY_RESEND_INTERVAL_SECONDS: ${PASSWORD_RECOVERY_RESEND_INTERVAL_SECONDS:-60}
+      EMAIL_VERIFICATION_TTL_SECONDS: ${EMAIL_VERIFICATION_TTL_SECONDS:-600}
+      PHONE_VERIFICATION_TTL_SECONDS: ${PHONE_VERIFICATION_TTL_SECONDS:-600}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
     command: sh -c "alembic upgrade head && uvicorn alzando_authorization.main:app --host 0.0.0.0 --port 8000 --reload"
     ports:
       - "8000:8000"

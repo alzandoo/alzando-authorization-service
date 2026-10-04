@@ -88,7 +88,7 @@ $app = Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/v1/applicat
 $app.data
 ```
 
-The response includes an Alzando-generated application ID, client ID, and (for confidential clients) a client secret shown once. Save the secret securely; PostgreSQL stores only its Argon2 hash. The initial application client receives `authorization:check` only, and only when Authorization is enabled.
+The response includes an Alzando-generated application ID, client ID, and (for confidential clients) a client secret shown once. Save the secret securely; PostgreSQL stores only its Argon2 hash. The initial client receives runtime scopes corresponding to the enabled services (Authorization, Signup, and Login are currently supported).
 
 In production, application registration and service configuration require a platform-operator client. Provision one from the trusted deployment environment:
 
@@ -126,6 +126,12 @@ Send `Authorization: Bearer $token` with API calls. Role, permission, and assign
 | `PATCH` | `/api/v1/applications/{application_id}` | Update application name, description, owner, or status |
 | `GET` | `/api/v1/services` | List the service catalogue |
 | `PUT` | `/api/v1/applications/{application_id}/services` | Replace application service configuration |
+| `POST` | `/api/v1/auth/signup` | Create an application-scoped password account |
+| `POST` | `/api/v1/auth/login` | Authenticate an application-scoped password account |
+| `POST` | `/api/v1/auth/password/recovery` | Start account password recovery |
+| `POST` | `/api/v1/auth/password/reset` | Verify a recovery code and set a new password |
+| `POST` | `/api/v1/auth/verify/email` | Verify an account email address |
+| `POST` | `/api/v1/auth/verify/phone` | Verify an account phone number |
 | `POST` | `/api/v1/authorization/roles` | Create an application-scoped role |
 | `POST` | `/api/v1/authorization/permissions` | Create an application-scoped permission |
 | `PUT` | `/api/v1/authorization/roles/{role_id}/permissions` | Replace a role's complete permission set |
@@ -135,11 +141,29 @@ Send `Authorization: Bearer $token` with API calls. Role, permission, and assign
 
 Application registry and service-configuration APIs require `platform:manage`. Authorization APIs require the Authorization service to be enabled for the registered application and enforce application scopes. Relationship tables use composite foreign keys to prevent cross-application role and permission links. Empty arrays on either RBAC relationship `PUT` endpoint clear assignments. Resource context is accepted and echoed, but V1 does not evaluate ownership or resource-level rules.
 
+Signup and login require application credentials with `authentication:signup` and `authentication:login`, respectively, and the matching service must be enabled. Signup accepts email, optional phone/display name, and a password of 12–128 characters. Email is normalized to lowercase; passwords are stored as Argon2 hashes. Accounts and generated `account_reference` values are application-scoped. The consuming application should store the mapping to its own user ID. Login accepts email/password and returns an authentication state; application-user access/refresh tokens are not included until the Token Services APIs are implemented. Three consecutive incorrect passwords put an account into `RECOVERY_REQUIRED`; successful password authentication resets the counter. If Email Verification is enabled, signup/login return `VERIFICATION_REQUIRED`; challenge delivery and verification endpoints are a later feature slice.
+
+Password recovery and reset require `authentication:recovery` and the enabled `PASSWORD_RECOVERY` service. Recovery responses are account-enumeration resistant and do not include challenge material in production. Codes are HMAC-digested, expire after five minutes by default, allow five attempts, are single-use, and are limited to one request per account per minute by default. In development, the code and recovery reference are returned for local testing. In production, set `CHALLENGE_HMAC_SECRET` (at least 32 characters), `SMTP_HOST`, and `SMTP_FROM_EMAIL`; configure SMTP credentials if required. Delivery runs after the response and delivery failures are logged without recovery values or email addresses. A successful reset sets a new Argon2 password and clears the failed-login lock. Password reset does not issue a user access token.
+
+When Email Verification is enabled, Signup creates a pending account and sends a short-lived email code. The signup response returns the verification reference; only development responses include the code. `POST /api/v1/auth/verify/email` requires the `authentication:verify` scope and enabled `EMAIL_VERIFICATION` service. Codes expire after ten minutes by default, allow five attempts, and are single-use. Email uses the same SMTP configuration as recovery.
+
+When Phone Verification is enabled, Signup requires a phone number in E.164 form (for example `+14155550123`) and creates a second pending verification challenge. In development, the API returns the code for local testing; production SMS delivery is intentionally unavailable until an SMS provider is selected and configured. `POST /api/v1/auth/verify/phone` requires `authentication:verify_phone` and the `PHONE_VERIFICATION` service. If both email and phone verification are enabled, the account becomes active only after both channels are verified.
+
+To provision an application client for the implemented authentication APIs, enable Signup/Login through the platform configuration API, then create a separate confidential client with the needed scopes:
+
+```powershell
+docker compose exec api python -m alzando_authorization.cli create-client --application-id YOUR_APPLICATION_ID --scope authentication:signup --scope authentication:login
+```
+
+Add `--scope authentication:recovery` when the application's client also needs password recovery.
+
+Save the generated secret securely. Do not paste it into source control or chat. Each scope is rejected at token issuance if its service is disabled for that application.
+
 ## Production deployment requirements
 
 - Set `TOKEN_ISSUER`, `TOKEN_AUDIENCE`, and `JWT_PRIVATE_KEY_FILE` to production values. Mount the signing key from a secret manager; never commit it to Git. `JWT_PUBLIC_KEY_FILE` can supply the verification key separately.
 - Use managed PostgreSQL, secret storage, TLS, and operational monitoring.
-- Public-client authentication, signup/login, verification, recovery, OTP, MFA, passkeys, social login, application-user tokens, and audit-event APIs remain planned feature slices.
+- Public-client authentication, email/phone verification, OTP, MFA, passkeys, social login, application-user tokens, and audit-event APIs remain planned feature slices.
 - The accepted application-type values and detailed per-service configuration schemas are initial V1 choices and should be reviewed against product requirements.
 
 ## API response envelope

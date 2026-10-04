@@ -3,7 +3,7 @@ from functools import lru_cache
 from uuid import UUID, uuid4
 
 import jwt
-from fastapi import Depends, FastAPI, Form, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Form, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -12,6 +12,17 @@ from sqlalchemy.orm import Session
 
 from alzando_authorization.config import settings
 from alzando_authorization.clients import add_application_client, verify_client_secret
+from alzando_authorization.authentication import (
+    login as authenticate_user,
+    signup as create_authentication_account,
+)
+from alzando_authorization.password_recovery import (
+    complete_password_reset,
+    request_password_recovery,
+)
+from alzando_authorization.email_delivery import send_configured_email
+from alzando_authorization.email_verification import verify_email
+from alzando_authorization.phone_verification import verify_phone
 from alzando_authorization.database import engine, get_db
 from alzando_authorization.models import (
     Application,
@@ -27,6 +38,12 @@ from alzando_authorization.schemas import (
     ReplaceApplicationServices,
     ReplacePermissions,
     ReplaceUserRoles,
+    LoginRequest,
+    PasswordRecoveryRequest,
+    PasswordResetRequest,
+    EmailVerificationRequest,
+    PhoneVerificationRequest,
+    SignupRequest,
     UpdateApplication,
 )
 from alzando_authorization.tokens import AccessTokenService
@@ -56,6 +73,15 @@ def token_service() -> AccessTokenService:
 def create_app() -> FastAPI:
     app = FastAPI(title="Alzando Authorization Service", version="0.1.0")
     basic_auth = HTTPBasic(auto_error=False)
+    service_scopes = {
+        "authorization:manage": "AUTHORIZATION",
+        "authorization:check": "AUTHORIZATION",
+        "authentication:signup": "SIGNUP",
+        "authentication:login": "LOGIN",
+        "authentication:recovery": "PASSWORD_RECOVERY",
+        "authentication:verify": "EMAIL_VERIFICATION",
+        "authentication:verify_phone": "PHONE_VERIFICATION",
+    }
 
     @app.middleware("http")
     async def context_middleware(request: Request, call_next: Callable):
@@ -101,36 +127,43 @@ def create_app() -> FastAPI:
                 raise ServiceError("APPLICATION_NOT_FOUND", "Application is not registered.", 403)
             if application.status != "ACTIVE":
                 raise ServiceError("APPLICATION_INACTIVE", "Application is not active.", 403)
-            if required_scope.startswith("authorization:"):
+            service_code = service_scopes.get(required_scope)
+            if service_code:
                 enabled = db.scalar(select(ApplicationService.enabled).where(
                     ApplicationService.application_id == application_id,
-                    ApplicationService.service_code == "AUTHORIZATION",
+                    ApplicationService.service_code == service_code,
                 ))
                 if not enabled:
-                    raise ServiceError("SERVICE_NOT_ENABLED", "Authorization is not enabled for this application.", 403)
+                    raise ServiceError("SERVICE_NOT_ENABLED", f"{service_code.title()} is not enabled for this application.", 403)
             return application_id
 
         return dependency
 
     @app.exception_handler(ServiceError)
     async def service_error_handler(request: Request, exc: ServiceError):
-        return JSONResponse(status_code=exc.http_status, content={
+        response = JSONResponse(status_code=exc.http_status, content={
             "success": False,
             "status": exc.code,
             "data": None,
             "error": {"code": exc.code, "message": exc.message},
             "request_id": getattr(request.state, "request_id", f"req_{uuid4().hex}"),
         })
+        if request.url.path.startswith("/api/v1/auth/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(request: Request, exc: RequestValidationError):
-        return JSONResponse(status_code=422, content={
+        response = JSONResponse(status_code=422, content={
             "success": False,
             "status": "INVALID_REQUEST",
             "data": None,
             "error": {"code": "INVALID_REQUEST", "message": "Request validation failed."},
             "request_id": getattr(request.state, "request_id", f"req_{uuid4().hex}"),
         })
+        if request.url.path.startswith("/api/v1/auth/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     def success(request: Request, status: str, data: dict):
         return {
@@ -182,12 +215,17 @@ def create_app() -> FastAPI:
         requested_scopes = set(scope.split()) if scope else granted_scopes
         if not requested_scopes or not requested_scopes.issubset(granted_scopes):
             return oauth_error("invalid_scope", 400)
-        if requested_scopes & {"authorization:manage", "authorization:check"}:
-            authorization_enabled = db.scalar(select(ApplicationService.enabled).where(
+        requested_services = {
+            service_scopes[requested_scope]
+            for requested_scope in requested_scopes
+            if requested_scope in service_scopes
+        }
+        for service_code in requested_services:
+            service_enabled = db.scalar(select(ApplicationService.enabled).where(
                 ApplicationService.application_id == client.application_id,
-                ApplicationService.service_code == "AUTHORIZATION",
+                ApplicationService.service_code == service_code,
             ))
-            if not authorization_enabled:
+            if not service_enabled:
                 return oauth_error("invalid_scope", 400)
         access_token = token_service().issue(
             client.client_id, client.application_id, sorted(requested_scopes)
@@ -283,6 +321,84 @@ def create_app() -> FastAPI:
             "application_id": application_id,
             "services_updated": count,
         })
+
+    @app.post("/api/v1/auth/signup", status_code=201)
+    def post_signup(
+        body: SignupRequest,
+        request: Request,
+        response: Response,
+        background_tasks: BackgroundTasks,
+        application_id: str = Depends(require_scope("authentication:signup")),
+        db: Session = Depends(get_db),
+    ):
+        result = create_authentication_account(db, application_id, body)
+        if result.get("delivery"):
+            background_tasks.add_task(send_configured_email, **result["delivery"])
+        response.headers["Cache-Control"] = "no-store"
+        return success(request, result["status"], result["data"])
+
+    @app.post("/api/v1/auth/login")
+    def post_login(
+        body: LoginRequest,
+        request: Request,
+        response: Response,
+        application_id: str = Depends(require_scope("authentication:login")),
+        db: Session = Depends(get_db),
+    ):
+        result = authenticate_user(db, application_id, body)
+        response.headers["Cache-Control"] = "no-store"
+        return success(request, result["status"], result["data"])
+
+    @app.post("/api/v1/auth/password/recovery")
+    def post_password_recovery(
+        body: PasswordRecoveryRequest,
+        request: Request,
+        response: Response,
+        background_tasks: BackgroundTasks,
+        application_id: str = Depends(require_scope("authentication:recovery")),
+        db: Session = Depends(get_db),
+    ):
+        result = request_password_recovery(db, application_id, body.identifier)
+        if result.get("delivery"):
+            background_tasks.add_task(send_configured_email, **result["delivery"])
+        response.headers["Cache-Control"] = "no-store"
+        return success(request, result["status"], result["data"])
+
+    @app.post("/api/v1/auth/password/reset")
+    def post_password_reset(
+        body: PasswordResetRequest,
+        request: Request,
+        response: Response,
+        application_id: str = Depends(require_scope("authentication:recovery")),
+        db: Session = Depends(get_db),
+    ):
+        result = complete_password_reset(db, application_id, body)
+        response.headers["Cache-Control"] = "no-store"
+        return success(request, "PASSWORD_RESET", result)
+
+    @app.post("/api/v1/auth/verify/email")
+    def post_verify_email(
+        body: EmailVerificationRequest,
+        request: Request,
+        response: Response,
+        application_id: str = Depends(require_scope("authentication:verify")),
+        db: Session = Depends(get_db),
+    ):
+        result = verify_email(db, application_id, body.verification_reference, body.code)
+        response.headers["Cache-Control"] = "no-store"
+        return success(request, "VERIFIED", result)
+
+    @app.post("/api/v1/auth/verify/phone")
+    def post_verify_phone(
+        body: PhoneVerificationRequest,
+        request: Request,
+        response: Response,
+        application_id: str = Depends(require_scope("authentication:verify_phone")),
+        db: Session = Depends(get_db),
+    ):
+        result = verify_phone(db, application_id, body.verification_reference, body.code)
+        response.headers["Cache-Control"] = "no-store"
+        return success(request, "VERIFIED", result)
 
     @app.post("/api/v1/authorization/roles", status_code=201)
     def post_role(

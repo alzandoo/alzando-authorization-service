@@ -1,0 +1,135 @@
+import secrets
+
+from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from alzando_authorization.models import ApplicationService, AuthenticationAccount
+from alzando_authorization.schemas import LoginRequest, SignupRequest
+from alzando_authorization.service import ServiceError
+from alzando_authorization.email_verification import create_email_verification_challenge
+
+password_hasher = PasswordHasher()
+_DUMMY_PASSWORD_HASH = password_hasher.hash(secrets.token_urlsafe(32))
+MAX_FAILED_PASSWORD_ATTEMPTS = 3
+
+
+def signup(db: Session, application_id: str, request: SignupRequest) -> dict:
+    email_verification_enabled = bool(db.scalar(select(ApplicationService.enabled).where(
+        ApplicationService.application_id == application_id,
+        ApplicationService.service_code == "EMAIL_VERIFICATION",
+    )))
+    phone_verification_enabled = bool(db.scalar(select(ApplicationService.enabled).where(
+        ApplicationService.application_id == application_id,
+        ApplicationService.service_code == "PHONE_VERIFICATION",
+    )))
+    if phone_verification_enabled and not request.phone:
+        raise ServiceError("PHONE_REQUIRED", "A phone number is required when Phone Verification is enabled.", 422)
+    account = AuthenticationAccount(
+        application_id=application_id,
+        account_reference=f"acct_{secrets.token_urlsafe(18)}",
+        email=request.email,
+        phone=request.phone,
+        display_name=request.display_name,
+        password_hash=password_hasher.hash(request.password),
+        status="PENDING_VERIFICATION" if email_verification_enabled or phone_verification_enabled else "ACTIVE",
+        email_verified=not email_verification_enabled,
+        phone_verified=not phone_verification_enabled,
+        failed_login_attempts=0,
+    )
+    verification = None
+    phone_verification = None
+    db.add(account)
+    try:
+        db.flush()
+        if email_verification_enabled:
+            verification = create_email_verification_challenge(db, application_id, account)
+        if phone_verification_enabled:
+            from alzando_authorization.phone_verification import create_phone_verification_challenge
+
+            phone_verification = create_phone_verification_challenge(db, application_id, account)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise ServiceError(
+            "ACCOUNT_ALREADY_EXISTS", "An account already exists for the supplied email or phone.", 409
+        ) from None
+    verification_response = None
+    deliveries = []
+    if verification:
+        verification_response = {
+            "channel": "EMAIL",
+            "verification_reference": verification["verification_reference"],
+        }
+        if "code" in verification:
+            verification_response.update({
+                "code": verification["code"],
+                "expires_in_seconds": verification["expires_in_seconds"],
+                "development_only": True,
+            })
+        if verification.get("delivery"):
+            deliveries.append(verification["delivery"])
+    phone_verification_response = None
+    if phone_verification:
+        phone_verification_response = {"channel": "PHONE", **phone_verification}
+    result = {
+        "status": "VERIFICATION_REQUIRED" if email_verification_enabled or phone_verification_enabled else "ACCOUNT_CREATED",
+        "data": {
+            "account_reference": account.account_reference,
+            "verification": verification_response,
+            "phone_verification": phone_verification_response,
+        },
+    }
+    if deliveries:
+        result["deliveries"] = deliveries
+    return result
+
+
+def login(db: Session, application_id: str, request: LoginRequest) -> dict:
+    identifier = request.identifier.strip().lower()
+    account = db.scalar(select(AuthenticationAccount).where(
+        AuthenticationAccount.application_id == application_id,
+        AuthenticationAccount.email == identifier,
+    ).with_for_update())
+
+    if account is None:
+        _verify_password(_DUMMY_PASSWORD_HASH, request.password)
+        raise ServiceError("AUTHENTICATION_FAILED", "Authentication failed.", 401)
+
+    if account.recovery_required:
+        raise ServiceError("RECOVERY_REQUIRED", "Password recovery is required before another login attempt.", 401)
+
+    if not _verify_password(account.password_hash, request.password):
+        account.failed_login_attempts += 1
+        if account.failed_login_attempts >= MAX_FAILED_PASSWORD_ATTEMPTS:
+            account.recovery_required = True
+            db.commit()
+            raise ServiceError("RECOVERY_REQUIRED", "Password recovery is required.", 401)
+        db.commit()
+        raise ServiceError("AUTHENTICATION_FAILED", "Authentication failed.", 401)
+
+    account.failed_login_attempts = 0
+    db.commit()
+
+    if account.status == "PENDING_VERIFICATION":
+        return {
+            "status": "VERIFICATION_REQUIRED",
+            "data": {"account_reference": account.account_reference},
+        }
+    return {
+        "status": "AUTHENTICATED",
+        "data": {
+            "account_reference": account.account_reference,
+            "authentication": None,
+            "next_step": "REQUEST_APPLICATION_USER_TOKEN",
+        },
+    }
+
+
+def _verify_password(password_hash: str, candidate: str) -> bool:
+    try:
+        return password_hasher.verify(password_hash, candidate)
+    except (VerifyMismatchError, VerificationError, InvalidHashError):
+        return False

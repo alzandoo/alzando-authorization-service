@@ -55,6 +55,76 @@ class ReplaceApplicationServices(BaseModel):
         return values
 
 
+class SignupRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+    phone: str | None = Field(default=None, min_length=8, max_length=16, pattern=r"^\+[1-9][0-9]{7,14}$")
+    display_name: str | None = Field(default=None, max_length=200)
+    password: str = Field(min_length=12, max_length=128)
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("phone", mode="before")
+    @classmethod
+    def normalize_phone(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip()
+
+
+class LoginRequest(BaseModel):
+    method: Literal["PASSWORD"] = "PASSWORD"
+    identifier: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class PasswordRecoveryRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    identifier: str = Field(min_length=3, max_length=320)
+
+
+class PasswordResetRequest(BaseModel):
+    recovery_reference: str = Field(min_length=8, max_length=96, pattern=r"^rcv_[A-Za-z0-9_-]+$")
+    verification_code: str = Field(min_length=6, max_length=6, pattern=r"^[0-9]{6}$")
+    new_password: str = Field(min_length=12, max_length=128)
+
+
+class EmailVerificationRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    verification_reference: str = Field(
+        min_length=8, max_length=96, pattern=r"^ver_[A-Za-z0-9_-]+$"
+    )
+    code: str = Field(min_length=6, max_length=6, pattern=r"^[0-9]{6}$")
+
+
+class PhoneVerificationRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    verification_reference: str = Field(
+        min_length=8, max_length=96, pattern=r"^ver_[A-Za-z0-9_-]+$"
+    )
+    code: str = Field(min_length=6, max_length=6, pattern=r"^[0-9]{6}$")
+
+
+class OtpRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    purpose: Literal["LOGIN", "VERIFICATION", "MFA", "RECOVERY"]
+    channel: Literal["EMAIL", "SMS"]
+    account_reference: str = Field(min_length=8, max_length=96, pattern=r"^acct_[A-Za-z0-9_-]+$")
+
+
+class OtpVerifyRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    challenge_reference: str = Field(min_length=8, max_length=96, pattern=r"^otp_[A-Za-z0-9_-]+$")
+    otp: str = Field(min_length=6, max_length=6, pattern=r"^[0-9]{6}$")
+
+
 class CreateRole(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
