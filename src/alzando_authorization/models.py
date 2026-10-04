@@ -240,6 +240,27 @@ class PhoneVerificationChallenge(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 
+class AuthenticationGrant(Base):
+    __tablename__ = "authentication_grants"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["application_id", "account_reference"],
+            ["authentication_accounts.application_id", "authentication_accounts.account_reference"],
+            ondelete="CASCADE", name="fk_authentication_grants_account",
+        ),
+        Index("ix_authentication_grants_account_created", "application_id", "account_reference", "created_at"),
+    )
+
+    application_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    authentication_reference: Mapped[str] = mapped_column(String(96), primary_key=True)
+    account_reference: Mapped[str] = mapped_column(String(96), nullable=False)
+    mfa_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    mfa_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
 class OtpChallenge(Base):
     __tablename__ = "otp_challenges"
     __table_args__ = (
@@ -247,6 +268,11 @@ class OtpChallenge(Base):
             ["application_id", "account_reference"],
             ["authentication_accounts.application_id", "authentication_accounts.account_reference"],
             ondelete="CASCADE", name="fk_otp_challenges_account",
+        ),
+        ForeignKeyConstraint(
+            ["application_id", "authentication_reference"],
+            ["authentication_grants.application_id", "authentication_grants.authentication_reference"],
+            ondelete="CASCADE", name="fk_otp_challenges_authentication_grant",
         ),
         Index(
             "ix_otp_challenges_subject_created",
@@ -258,10 +284,34 @@ class OtpChallenge(Base):
     challenge_reference: Mapped[str] = mapped_column(String(96), primary_key=True)
     subject_reference: Mapped[str] = mapped_column(String(96), nullable=False)
     account_reference: Mapped[str | None] = mapped_column(String(96))
+    authentication_reference: Mapped[str | None] = mapped_column(String(96))
     purpose: Mapped[str] = mapped_column(String(24), nullable=False)
     channel: Mapped[str] = mapped_column(String(16), nullable=False)
     code_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failed_attempts: Mapped[int] = mapped_column(nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["application_id", "account_reference"],
+            ["authentication_accounts.application_id", "authentication_accounts.account_reference"],
+            ondelete="CASCADE", name="fk_user_sessions_account",
+        ),
+        UniqueConstraint("application_id", "refresh_token_hash", name="uq_user_sessions_refresh_hash"),
+        Index("ix_user_sessions_account_created", "application_id", "account_reference", "created_at"),
+    )
+
+    application_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    account_reference: Mapped[str] = mapped_column(String(96), nullable=False)
+    refresh_token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    mfa_authenticated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    refresh_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    rotated_to_session_id: Mapped[str | None] = mapped_column(String(96))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)

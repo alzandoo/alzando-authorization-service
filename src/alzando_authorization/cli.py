@@ -9,6 +9,9 @@ ALLOWED_SCOPES = {
     "authentication:signup", "authentication:login", "authentication:recovery",
     "authentication:verify",
     "authentication:verify_phone",
+    "authentication:otp",
+    "authentication:mfa",
+    "authentication:token",
 }
 
 

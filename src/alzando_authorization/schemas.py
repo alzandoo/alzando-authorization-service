@@ -125,6 +125,31 @@ class OtpVerifyRequest(BaseModel):
     otp: str = Field(min_length=6, max_length=6, pattern=r"^[0-9]{6}$")
 
 
+class MfaChallengeRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    authentication_reference: str = Field(min_length=8, max_length=96, pattern=r"^ath_[A-Za-z0-9_-]+$")
+    channel: Literal["EMAIL", "SMS"] = "EMAIL"
+
+
+class MfaVerifyRequest(OtpVerifyRequest):
+    pass
+
+
+class IssueUserTokenRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    authentication_reference: str = Field(min_length=8, max_length=96, pattern=r"^ath_[A-Za-z0-9_-]+$")
+
+
+class RefreshUserTokenRequest(BaseModel):
+    refresh_token: str = Field(min_length=32, max_length=160, pattern=r"^rft_[A-Za-z0-9_-]+$")
+
+
+class RevokeUserTokenRequest(RefreshUserTokenRequest):
+    pass
+
+
 class CreateRole(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 

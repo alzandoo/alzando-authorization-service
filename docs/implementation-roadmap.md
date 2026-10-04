@@ -12,6 +12,9 @@ This roadmap tracks implementation against the 27 API operations in the supplied
 - Password recovery/reset are implemented with one-time HMAC-digested codes, attempt limits, expiry, development-only code display, SMTP delivery configuration, and reset of the failed-login lock. Live recovery, password reset, and subsequent login have been verified.
 - Email verification is implemented with application-scoped, expiring, attempt-limited codes and shared SMTP delivery. SkillFlow signup, verification, and subsequent login have been verified live.
 - Phone verification is implemented with E.164 validation and application-scoped, expiring, attempt-limited challenges. SkillFlow's combined email/phone verification and post-verification login have been verified live in development; production SMS delivery awaits provider selection.
+- Purpose-scoped OTP request and verify APIs are implemented with application service/scope checks, single-use HMAC-digested codes, expiry, attempt limits, resend cooldown, dev-only code responses, and production SMTP email delivery. The SkillFlow development request and verification flow has been exercised live. SMS delivery awaits provider selection. OTP verification returns proof only and does not issue user tokens or mutate account state.
+- MFA challenge and verify APIs are implemented by reusing OTP challenges with the `MFA` purpose and the app's `MFA` plus `OTP` services. The SkillFlow email challenge and verification flow has been exercised live in development. Successful password login creates a short-lived, one-time authentication grant; MFA challenges bind to that grant.
+- Application-user tokens use short-lived RS256 access JWTs and opaque rotating refresh tokens. Password login creates a five-minute one-time grant; MFA-enabled applications require an MFA proof bound to that grant before exchange. Refresh-token reuse revokes active sessions for the account. Database migrations and API endpoints are implemented; live verification is pending.
 - Development-only `X-Dev-Application-Id` identity is not valid in production.
 
 ## API catalogue tracking
@@ -29,16 +32,16 @@ This roadmap tracks implementation against the 27 API operations in the supplied
 | 9 | `POST /api/v1/auth/password/reset` | Implemented; reset and subsequent login verified live |
 | 10 | `POST /api/v1/auth/verify/email` | Implemented; verified live against SkillFlow |
 | 11 | `POST /api/v1/auth/verify/phone` | Implemented; combined email/phone flow verified live in development; production SMS provider open |
-| 12 | `POST /api/v1/auth/otp/request` | Planned |
-| 13 | `POST /api/v1/auth/otp/verify` | Planned |
-| 14 | `POST /api/v1/auth/mfa/challenge` | Planned |
-| 15 | `POST /api/v1/auth/mfa/verify` | Planned |
+| 12 | `POST /api/v1/auth/otp/request` | Implemented; SkillFlow development flow verified live |
+| 13 | `POST /api/v1/auth/otp/verify` | Implemented; SkillFlow development flow verified live |
+| 14 | `POST /api/v1/auth/mfa/challenge` | Implemented; SkillFlow development flow verified live |
+| 15 | `POST /api/v1/auth/mfa/verify` | Implemented; SkillFlow development flow verified live |
 | 16 | `POST /api/v1/auth/passkey/register` | Planned |
 | 17 | `POST /api/v1/auth/passkey/authenticate` | Planned |
 | 18 | `POST /api/v1/auth/social/{provider}` | Planned |
-| 19 | `POST /api/v1/tokens` | Planned |
-| 20 | `POST /api/v1/tokens/refresh` | Planned |
-| 21 | `POST /api/v1/tokens/revoke` | Planned |
+| 19 | `POST /api/v1/tokens` | Implemented; live verification pending |
+| 20 | `POST /api/v1/tokens/refresh` | Implemented; live verification pending |
+| 21 | `POST /api/v1/tokens/revoke` | Implemented; live verification pending |
 | 22 | `POST /api/v1/authorization/roles` | Implemented; manually exercised |
 | 23 | `POST /api/v1/authorization/permissions` | Implemented; manually exercised |
 | 24 | `PUT /api/v1/authorization/roles/{role_id}/permissions` | Implemented; manually exercised |
@@ -53,7 +56,7 @@ The OAuth 2.0 client-credentials token endpoint (`POST /oauth2/token`) is an add
 1. Finish and exercise application registration, update, and service-configuration writes.
 2. Apply and live-verify application-scoped signup/login, including isolation, disabled-service/scope rejection, and the three-failure recovery-required rule.
 3. Apply and live-verify password recovery/reset and email verification, then live-verify phone verification and select its production SMS provider before enabling it there.
-4. Add MFA and application-user access/refresh/revocation tokens.
+4. Live-verify MFA and application-user access/refresh/revocation tokens.
 5. Add passkey and social-login integrations with provider-specific configuration.
 6. Add security/audit events and protected event retrieval.
 7. Harden production configuration, credential lifecycle, migrations, operational controls, and end-to-end verification.

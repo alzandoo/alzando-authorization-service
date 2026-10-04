@@ -1,4 +1,5 @@
 import secrets
+from datetime import timedelta
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
@@ -6,7 +7,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from alzando_authorization.models import ApplicationService, AuthenticationAccount
+from alzando_authorization.config import settings
+from alzando_authorization.models import (
+    ApplicationService,
+    AuthenticationAccount,
+    AuthenticationGrant,
+    utc_now,
+)
 from alzando_authorization.schemas import LoginRequest, SignupRequest
 from alzando_authorization.service import ServiceError
 from alzando_authorization.email_verification import create_email_verification_challenge
@@ -118,12 +125,54 @@ def login(db: Session, application_id: str, request: LoginRequest) -> dict:
             "status": "VERIFICATION_REQUIRED",
             "data": {"account_reference": account.account_reference},
         }
+    if account.status != "ACTIVE":
+        raise ServiceError("ACCOUNT_UNAVAILABLE", "The account is not active.", 401)
+
+    token_service_enabled = bool(db.scalar(select(ApplicationService.enabled).where(
+        ApplicationService.application_id == application_id,
+        ApplicationService.service_code == "TOKEN",
+    )))
+    if not token_service_enabled:
+        raise ServiceError("SERVICE_NOT_ENABLED", "Token Services is not enabled for this application.", 403)
+
+    mfa_required = bool(db.scalar(select(ApplicationService.enabled).where(
+        ApplicationService.application_id == application_id,
+        ApplicationService.service_code == "MFA",
+    )))
+    if mfa_required and not db.scalar(select(ApplicationService.enabled).where(
+        ApplicationService.application_id == application_id,
+        ApplicationService.service_code == "OTP",
+    )):
+        raise ServiceError("MFA_UNAVAILABLE", "MFA requires the OTP service to be enabled.", 503)
+
+    authentication_reference = f"ath_{secrets.token_urlsafe(18)}"
+    db.add(AuthenticationGrant(
+        application_id=application_id,
+        authentication_reference=authentication_reference,
+        account_reference=account.account_reference,
+        mfa_required=mfa_required,
+        mfa_verified=not mfa_required,
+        expires_at=utc_now() + timedelta(seconds=settings.authentication_grant_ttl_seconds),
+    ))
+    db.commit()
+    if mfa_required:
+        return {
+            "status": "MFA_REQUIRED",
+            "data": {
+                "account_reference": account.account_reference,
+                "authentication_reference": authentication_reference,
+                "next_step": "COMPLETE_MFA_CHALLENGE",
+                "expires_in_seconds": settings.authentication_grant_ttl_seconds,
+            },
+        }
     return {
         "status": "AUTHENTICATED",
         "data": {
             "account_reference": account.account_reference,
+            "authentication_reference": authentication_reference,
             "authentication": None,
             "next_step": "REQUEST_APPLICATION_USER_TOKEN",
+            "expires_in_seconds": settings.authentication_grant_ttl_seconds,
         },
     }
 

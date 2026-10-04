@@ -43,6 +43,24 @@ class AccessTokenService:
         }
         return jwt.encode(claims, self.private_key, algorithm="RS256", headers={"typ": "at+jwt"})
 
+    def issue_user(
+        self, account_reference: str, application_id: str, session_id: str, mfa_authenticated: bool
+    ) -> str:
+        now = datetime.now(timezone.utc)
+        claims = {
+            "iss": self.config.token_issuer,
+            "aud": self.config.token_audience,
+            "sub": account_reference,
+            "application_id": application_id,
+            "token_use": "user_access",
+            "sid": session_id,
+            "amr": ["pwd", "otp"] if mfa_authenticated else ["pwd"],
+            "iat": now,
+            "exp": now + timedelta(seconds=self.config.access_token_ttl_seconds),
+            "jti": uuid4().hex,
+        }
+        return jwt.encode(claims, self.private_key, algorithm="RS256", headers={"typ": "at+jwt"})
+
     def verify(self, token: str) -> dict:
         return jwt.decode(
             token,

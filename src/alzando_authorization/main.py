@@ -23,12 +23,16 @@ from alzando_authorization.password_recovery import (
 from alzando_authorization.email_delivery import send_configured_email
 from alzando_authorization.email_verification import verify_email
 from alzando_authorization.phone_verification import verify_phone
+from alzando_authorization.otp import request_otp, verify_otp
 from alzando_authorization.database import engine, get_db
 from alzando_authorization.models import (
     Application,
     ApplicationClient,
     ApplicationService,
+    AuthenticationAccount,
+    AuthenticationGrant,
     Service,
+    utc_now,
 )
 from alzando_authorization.schemas import (
     AuthorizationCheck,
@@ -43,6 +47,13 @@ from alzando_authorization.schemas import (
     PasswordResetRequest,
     EmailVerificationRequest,
     PhoneVerificationRequest,
+    OtpRequest,
+    OtpVerifyRequest,
+    MfaChallengeRequest,
+    MfaVerifyRequest,
+    IssueUserTokenRequest,
+    RefreshUserTokenRequest,
+    RevokeUserTokenRequest,
     SignupRequest,
     UpdateApplication,
 )
@@ -61,6 +72,11 @@ from alzando_authorization.registry import (
     register_application,
     replace_application_services,
     update_application,
+)
+from alzando_authorization.user_tokens import (
+    issue_user_tokens,
+    refresh_user_tokens,
+    revoke_user_token,
 )
 
 
@@ -81,6 +97,9 @@ def create_app() -> FastAPI:
         "authentication:recovery": "PASSWORD_RECOVERY",
         "authentication:verify": "EMAIL_VERIFICATION",
         "authentication:verify_phone": "PHONE_VERIFICATION",
+        "authentication:otp": "OTP",
+        "authentication:mfa": "MFA",
+        "authentication:token": "TOKEN",
     }
 
     @app.middleware("http")
@@ -148,7 +167,7 @@ def create_app() -> FastAPI:
             "error": {"code": exc.code, "message": exc.message},
             "request_id": getattr(request.state, "request_id", f"req_{uuid4().hex}"),
         })
-        if request.url.path.startswith("/api/v1/auth/"):
+        if request.url.path.startswith(("/api/v1/auth/", "/api/v1/tokens")):
             response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -161,7 +180,7 @@ def create_app() -> FastAPI:
             "error": {"code": "INVALID_REQUEST", "message": "Request validation failed."},
             "request_id": getattr(request.state, "request_id", f"req_{uuid4().hex}"),
         })
-        if request.url.path.startswith("/api/v1/auth/"):
+        if request.url.path.startswith(("/api/v1/auth/", "/api/v1/tokens")):
             response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -399,6 +418,132 @@ def create_app() -> FastAPI:
         result = verify_phone(db, application_id, body.verification_reference, body.code)
         response.headers["Cache-Control"] = "no-store"
         return success(request, "VERIFIED", result)
+
+    @app.post("/api/v1/auth/otp/request")
+    def post_otp_request(
+        body: OtpRequest,
+        request: Request,
+        response: Response,
+        background_tasks: BackgroundTasks,
+        application_id: str = Depends(require_scope("authentication:otp")),
+        db: Session = Depends(get_db),
+    ):
+        result = request_otp(db, application_id, body)
+        if result.get("delivery"):
+            background_tasks.add_task(send_configured_email, **result["delivery"])
+        response.headers["Cache-Control"] = "no-store"
+        return success(request, result["status"], result["data"])
+
+    @app.post("/api/v1/auth/otp/verify")
+    def post_otp_verify(
+        body: OtpVerifyRequest,
+        request: Request,
+        response: Response,
+        application_id: str = Depends(require_scope("authentication:otp")),
+        db: Session = Depends(get_db),
+    ):
+        result = verify_otp(db, application_id, body.challenge_reference, body.otp)
+        response.headers["Cache-Control"] = "no-store"
+        return success(request, "VERIFIED", result)
+
+    @app.post("/api/v1/auth/mfa/challenge")
+    def post_mfa_challenge(
+        body: MfaChallengeRequest,
+        request: Request,
+        response: Response,
+        background_tasks: BackgroundTasks,
+        application_id: str = Depends(require_scope("authentication:mfa")),
+        db: Session = Depends(get_db),
+    ):
+        grant = db.scalar(select(AuthenticationGrant).where(
+            AuthenticationGrant.application_id == application_id,
+            AuthenticationGrant.authentication_reference == body.authentication_reference,
+        ).with_for_update())
+        if (
+            grant is None or grant.used_at is not None or grant.expires_at <= utc_now()
+            or not grant.mfa_required or grant.mfa_verified
+        ):
+            raise ServiceError("INVALID_AUTHENTICATION_GRANT", "Authentication grant is invalid or expired.", 400)
+        account = db.scalar(select(AuthenticationAccount).where(
+            AuthenticationAccount.application_id == application_id,
+            AuthenticationAccount.account_reference == grant.account_reference,
+        ).with_for_update())
+        if account is None or account.status != "ACTIVE":
+            raise ServiceError("ACCOUNT_UNAVAILABLE", "The account is not active.", 401)
+        result = request_otp(db, application_id, OtpRequest(
+            account_reference=grant.account_reference,
+            purpose="MFA",
+            channel=body.channel,
+        ), authentication_reference=grant.authentication_reference)
+        if result.get("delivery"):
+            background_tasks.add_task(send_configured_email, **result["delivery"])
+        response.headers["Cache-Control"] = "no-store"
+        return success(request, "MFA_CHALLENGE_CREATED", result["data"])
+
+    @app.post("/api/v1/auth/mfa/verify")
+    def post_mfa_verify(
+        body: MfaVerifyRequest,
+        request: Request,
+        response: Response,
+        application_id: str = Depends(require_scope("authentication:mfa")),
+        db: Session = Depends(get_db),
+    ):
+        result = verify_otp(
+            db, application_id, body.challenge_reference, body.otp, expected_purpose="MFA"
+        )
+        authentication_reference = result.get("authentication_reference")
+        grant = db.scalar(select(AuthenticationGrant).where(
+            AuthenticationGrant.application_id == application_id,
+            AuthenticationGrant.authentication_reference == authentication_reference,
+        ).with_for_update()) if authentication_reference else None
+        if (
+            grant is None or grant.used_at is not None or grant.expires_at <= utc_now()
+            or not grant.mfa_required or grant.account_reference != result["account_reference"]
+        ):
+            raise ServiceError("INVALID_AUTHENTICATION_GRANT", "Authentication grant is invalid or expired.", 400)
+        grant.mfa_verified = True
+        db.commit()
+        result["authentication_reference"] = authentication_reference
+        response.headers["Cache-Control"] = "no-store"
+        return success(request, "MFA_VERIFIED", result)
+
+    @app.post("/api/v1/tokens")
+    def post_user_token(
+        body: IssueUserTokenRequest,
+        request: Request,
+        response: Response,
+        application_id: str = Depends(require_scope("authentication:token")),
+        db: Session = Depends(get_db),
+    ):
+        data = issue_user_tokens(db, application_id, body.authentication_reference, token_service())
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        return success(request, "TOKENS_ISSUED", data)
+
+    @app.post("/api/v1/tokens/refresh")
+    def post_user_token_refresh(
+        body: RefreshUserTokenRequest,
+        request: Request,
+        response: Response,
+        application_id: str = Depends(require_scope("authentication:token")),
+        db: Session = Depends(get_db),
+    ):
+        data = refresh_user_tokens(db, application_id, body.refresh_token, token_service())
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        return success(request, "TOKENS_REFRESHED", data)
+
+    @app.post("/api/v1/tokens/revoke")
+    def post_user_token_revoke(
+        body: RevokeUserTokenRequest,
+        request: Request,
+        response: Response,
+        application_id: str = Depends(require_scope("authentication:token")),
+        db: Session = Depends(get_db),
+    ):
+        revoke_user_token(db, application_id, body.refresh_token)
+        response.headers["Cache-Control"] = "no-store"
+        return success(request, "TOKEN_REVOKED", {"revoked": True})
 
     @app.post("/api/v1/authorization/roles", status_code=201)
     def post_role(

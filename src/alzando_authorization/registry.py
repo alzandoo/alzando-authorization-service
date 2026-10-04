@@ -52,6 +52,12 @@ def register_application(db: Session, request: RegisterApplication) -> tuple[App
         client_scopes.append("authentication:verify")
     if "PHONE_VERIFICATION" in requested:
         client_scopes.append("authentication:verify_phone")
+    if "OTP" in requested:
+        client_scopes.append("authentication:otp")
+    if "MFA" in requested:
+        client_scopes.append("authentication:mfa")
+    if "TOKEN" in requested:
+        client_scopes.append("authentication:token")
     client, client_secret = add_application_client(
         db, application.application_id, client_scopes, request.client_type
     )
