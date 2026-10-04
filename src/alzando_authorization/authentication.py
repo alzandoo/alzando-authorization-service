@@ -151,7 +151,7 @@ def login(db: Session, application_id: str, request: LoginRequest) -> dict:
         authentication_reference=authentication_reference,
         account_reference=account.account_reference,
         mfa_required=mfa_required,
-        mfa_verified=not mfa_required,
+        mfa_verified=False,
         expires_at=utc_now() + timedelta(seconds=settings.authentication_grant_ttl_seconds),
     ))
     db.commit()

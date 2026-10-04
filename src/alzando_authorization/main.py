@@ -351,8 +351,11 @@ def create_app() -> FastAPI:
         db: Session = Depends(get_db),
     ):
         result = create_authentication_account(db, application_id, body)
+        deliveries = result.get("deliveries", [])
         if result.get("delivery"):
-            background_tasks.add_task(send_configured_email, **result["delivery"])
+            deliveries = [*deliveries, result["delivery"]]
+        for delivery in deliveries:
+            background_tasks.add_task(send_configured_email, **delivery)
         response.headers["Cache-Control"] = "no-store"
         return success(request, result["status"], result["data"])
 
