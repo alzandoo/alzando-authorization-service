@@ -3,16 +3,9 @@ import json
 
 from alzando_authorization.clients import create_confidential_client
 from alzando_authorization.database import SessionLocal
+from alzando_authorization.scopes import SCOPE_TO_SERVICE
 
-ALLOWED_SCOPES = {
-    "authorization:manage", "authorization:check",
-    "authentication:signup", "authentication:login", "authentication:recovery",
-    "authentication:verify",
-    "authentication:verify_phone",
-    "authentication:otp",
-    "authentication:mfa",
-    "authentication:token",
-}
+ALLOWED_SCOPES = set(SCOPE_TO_SERVICE)
 
 
 def main() -> None:

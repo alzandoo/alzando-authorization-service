@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="820" viewBox="0 0 1200 820" role="img" aria-labelledby="title description">
+  <title id="title">How the pytest API fixture works</title>
+  <desc id="description">The api fixture creates an isolated in-memory SQLite database, seeds test data, overrides FastAPI's database dependency, yields a test client and sessions, then cleans up. The selected registry test uses the client for HTTP requests and the session factory to inspect stored state.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,5 L0,10 z" fill="#526581"/>
+    </marker>
+    <style>
+      .bg { fill: #f6f8fc; }
+      .title { font: 700 30px 'Segoe UI', Arial, sans-serif; fill: #16243a; }
+      .subtitle { font: 16px 'Segoe UI', Arial, sans-serif; fill: #506078; }
+      .box { fill: #fff; stroke: #91a4bf; stroke-width: 2; rx: 15; }
+      .fixture { fill: #e9f1ff; stroke: #5481c0; stroke-width: 2.5; rx: 18; }
+      .test { fill: #e8f7ef; stroke: #50a878; stroke-width: 2.5; rx: 18; }
+      .cleanup { fill: #fff2e5; stroke: #d99545; stroke-width: 2; rx: 15; }
+      .label { font: 700 18px 'Segoe UI', Arial, sans-serif; fill: #1b2d46; }
+      .body { font: 15px 'Segoe UI', Arial, sans-serif; fill: #384b64; }
+      .small { font: 13px 'Segoe UI', Arial, sans-serif; fill: #5a6b80; }
+      .arrow { stroke: #526581; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+      .dashed { stroke-dasharray: 7 6; }
+    </style>
+  </defs>
+  <rect class="bg" width="1200" height="820"/>
+  <text class="title" x="52" y="54">How the <tspan font-family="monospace">api</tspan> fixture works</text>
+  <text class="subtitle" x="52" y="83">Source: tests/conftest.py · Example: test_service_catalogue_and_application_registration</text>
+
+  <rect class="test" x="55" y="120" width="300" height="102"/>
+  <text class="label" x="80" y="155">Pytest starts the test</text>
+  <text class="body" x="80" y="184">Test asks for <tspan font-family="monospace">api</tspan> by parameter name.</text>
+  <text class="small" x="80" y="205">Pytest discovers it from conftest.py.</text>
+
+  <path class="arrow" d="M355 171 H420"/>
+  <rect class="fixture" x="430" y="120" width="320" height="102"/>
+  <text class="label" x="455" y="155">Fixture setup runs</text>
+  <text class="body" x="455" y="184">Settings become development mode;</text>
+  <text class="body" x="455" y="205">challenge HMAC secret is fixed for tests.</text>
+
+  <path class="arrow" d="M590 222 V268"/>
+  <rect class="box" x="315" y="278" width="550" height="123"/>
+  <text class="label" x="342" y="313">Create an isolated in-memory SQLite database</text>
+  <text class="body" x="342" y="343">Create all SQLAlchemy tables, enable SQLite foreign keys,</text>
+  <text class="body" x="342" y="366">then seed app_pytest plus service catalogue/config rows.</text>
+  <text class="small" x="342" y="389">StaticPool keeps one in-memory database available to TestClient threads.</text>
+
+  <path class="arrow" d="M590 401 V447"/>
+  <rect class="box" x="315" y="457" width="550" height="112"/>
+  <text class="label" x="342" y="491">Override FastAPI's get_db dependency</text>
+  <text class="body" x="342" y="521">Every request gets a SQLAlchemy session connected to</text>
+  <text class="body" x="342" y="544">the test database, never the configured development database.</text>
+
+  <path class="arrow" d="M590 569 V615"/>
+  <rect class="fixture" x="315" y="625" width="550" height="100"/>
+  <text class="label" x="342" y="660">Yield test tools</text>
+  <text class="body" x="342" y="689"><tspan font-family="monospace">api</tspan> returns (TestClient, session factory, settings).</text>
+  <text class="small" x="342" y="711">The test uses HTTP calls and can inspect persisted rows directly.</text>
+
+  <path class="arrow" d="M865 675 H930"/>
+  <rect class="test" x="940" y="602" width="220" height="146"/>
+  <text class="label" x="962" y="637">Selected test</text>
+  <text class="body" x="962" y="666">GET services</text>
+  <text class="body" x="962" y="690">POST application</text>
+  <text class="body" x="962" y="714">GET stored details</text>
+  <text class="small" x="962" y="737">assert response + database</text>
+
+  <path class="arrow dashed" d="M1050 748 V762"/>
+  <rect class="cleanup" x="940" y="770" width="220" height="50"/>
+  <text class="small" x="956" y="791">After test: clear override,</text>
+  <text class="small" x="956" y="809">dispose DB, clear token cache.</text>
+</svg>

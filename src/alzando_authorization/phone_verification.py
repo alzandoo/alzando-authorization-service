@@ -83,3 +83,42 @@ def verify_phone(db: Session, application_id: str, verification_reference: str, 
     activate_when_required_channels_are_verified(db, application_id, account)
     db.commit()
     return {"channel": "PHONE", "verified": True}
+
+
+def resend_phone_verification(db: Session, application_id: str, account_reference: str) -> dict:
+    """Issue a fresh phone verification code for an account that is still pending."""
+    now = utc_now()
+    account = db.scalar(select(AuthenticationAccount).where(
+        AuthenticationAccount.application_id == application_id,
+        AuthenticationAccount.account_reference == account_reference,
+    ).with_for_update())
+    if account is None or account.status != "PENDING_VERIFICATION" or account.phone_verified or not account.phone:
+        raise ServiceError(
+            "VERIFICATION_NOT_AVAILABLE", "Phone verification is not available for this account.", 400
+        )
+
+    recent = db.scalar(select(PhoneVerificationChallenge).where(
+        PhoneVerificationChallenge.application_id == application_id,
+        PhoneVerificationChallenge.account_reference == account.account_reference,
+    ).order_by(PhoneVerificationChallenge.created_at.desc()).limit(1))
+    interval = settings.verification_resend_interval_seconds
+    if recent and recent.created_at > now - timedelta(seconds=interval):
+        wait = max(1, interval - int((now - recent.created_at).total_seconds()))
+        db.rollback()
+        raise ServiceError(
+            "VERIFICATION_RATE_LIMITED", "Wait before requesting another code.", 429,
+            headers={"Retry-After": str(wait)},
+        )
+
+    db.execute(update(PhoneVerificationChallenge).where(
+        PhoneVerificationChallenge.application_id == application_id,
+        PhoneVerificationChallenge.account_reference == account.account_reference,
+        PhoneVerificationChallenge.used_at.is_(None),
+    ).values(used_at=now))
+    try:
+        result = create_phone_verification_challenge(db, application_id, account)
+    except ServiceError:
+        db.rollback()
+        raise
+    db.commit()
+    return result

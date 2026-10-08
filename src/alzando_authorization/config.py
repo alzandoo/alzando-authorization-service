@@ -16,6 +16,17 @@ class Settings(BaseSettings):
     challenge_hmac_secret: str | None = None
     password_recovery_ttl_seconds: int = 300
     password_recovery_resend_interval_seconds: int = 60
+    # Development-only: lets callers impersonate an application with `X-Dev-Application-Id`.
+    # Requires APP_ENV=development AND this explicit flag.
+    allow_dev_identity_header: bool = False
+    # Rate limiting (per process; see rate_limit.py).
+    rate_limit_enabled: bool = True
+    rate_limit_ip_per_minute: int = 120
+    rate_limit_identifier_attempts: int = 10
+    rate_limit_identifier_window_seconds: int = 900
+    # Honour X-Forwarded-For (right-most entry) when running behind a trusted proxy.
+    trust_proxy_headers: bool = False
+    verification_resend_interval_seconds: int = 60
     email_verification_ttl_seconds: int = 600
     phone_verification_ttl_seconds: int = 600
     otp_ttl_seconds: int = 300

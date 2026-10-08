@@ -110,6 +110,12 @@ class PhoneVerificationRequest(BaseModel):
     code: str = Field(min_length=6, max_length=6, pattern=r"^[0-9]{6}$")
 
 
+class ResendVerificationRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    account_reference: str = Field(min_length=8, max_length=96, pattern=r"^acct_[A-Za-z0-9_-]+$")
+
+
 class OtpRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 

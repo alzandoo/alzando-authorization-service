@@ -98,7 +98,21 @@ def _normalize_sqlite_datetimes(_session, instance) -> None:
 def api(monkeypatch: pytest.MonkeyPatch) -> Generator[tuple[TestClient, sessionmaker[Session], object], None, None]:
     settings = main_module.settings
     monkeypatch.setattr(settings, "app_env", "development")
+    monkeypatch.setattr(settings, "allow_dev_identity_header", True)
     monkeypatch.setattr(settings, "challenge_hmac_secret", "pytest-challenge-hmac-secret-32-bytes")
+    # Keep tests hermetic even when a developer has real provider credentials in .env.
+    monkeypatch.setattr(settings, "smtp_host", None)
+    monkeypatch.setattr(settings, "smtp_port", 587)
+    monkeypatch.setattr(settings, "smtp_username", None)
+    monkeypatch.setattr(settings, "smtp_password", None)
+    monkeypatch.setattr(settings, "smtp_from_email", None)
+    monkeypatch.setattr(settings, "smtp_starttls", True)
+    monkeypatch.setattr(settings, "rate_limit_enabled", True)
+    monkeypatch.setattr(settings, "rate_limit_ip_per_minute", 120)
+    monkeypatch.setattr(settings, "rate_limit_identifier_attempts", 10)
+    monkeypatch.setattr(settings, "rate_limit_identifier_window_seconds", 900)
+    monkeypatch.setattr(settings, "trust_proxy_headers", False)
+    monkeypatch.setattr(settings, "verification_resend_interval_seconds", 60)
     main_module.token_service.cache_clear()
 
     engine = create_engine(
@@ -112,9 +126,23 @@ def api(monkeypatch: pytest.MonkeyPatch) -> Generator[tuple[TestClient, sessionm
         bind=engine, autoflush=False, expire_on_commit=False, class_=SQLiteTestSession
     )
 
-    service_codes = (
-        "SIGNUP", "LOGIN", "PASSWORD_RECOVERY", "EMAIL_VERIFICATION", "PHONE_VERIFICATION",
-        "OTP", "MFA", "TOKEN", "AUTHORIZATION",
+    # Match the production catalogue seeded by migration 0003_application_registry.
+    # The test database is intentionally isolated, but uses the same service
+    # codes, names, descriptions, types, and active status as production.
+    production_service_catalogue = (
+        ("SIGNUP", "Signup", "Create an application-scoped authentication account.", "AUTHENTICATION"),
+        ("LOGIN", "Login", "Authenticate an application user.", "AUTHENTICATION"),
+        ("PASSWORD_RECOVERY", "Password Recovery", "Recover or reset an account password.", "AUTHENTICATION"),
+        ("EMAIL_VERIFICATION", "Email Verification", "Verify an account email address.", "VERIFICATION"),
+        ("PHONE_VERIFICATION", "Phone Verification", "Verify an account phone number.", "VERIFICATION"),
+        ("OTP", "One-Time Password", "Issue and verify one-time passwords.", "AUTHENTICATION"),
+        ("MFA", "Multi-Factor Authentication", "Apply configured multi-factor challenges.", "AUTHENTICATION"),
+        ("PASSKEY", "Passkey", "Register and authenticate with passkeys.", "AUTHENTICATION"),
+        ("SOCIAL_LOGIN", "Social Login", "Authenticate through a configured identity provider.", "AUTHENTICATION"),
+        ("TOKEN", "Token Services", "Issue, refresh, and revoke application-user tokens.", "TOKEN"),
+        ("AUTHORIZATION", "Authorization", "Manage RBAC configuration and evaluate permissions.", "AUTHORIZATION"),
+        ("SECURITY", "Security Services", "Apply configured authentication security controls.", "SECURITY"),
+        ("AUDIT", "Audit", "Record and retrieve security events.", "SECURITY"),
     )
     with sessions() as db:
         db.add(Application(
@@ -125,16 +153,16 @@ def api(monkeypatch: pytest.MonkeyPatch) -> Generator[tuple[TestClient, sessionm
             status="ACTIVE",
         ))
         db.flush()
-        for code in service_codes:
+        for code, name, description, service_type in production_service_catalogue:
             db.add(Service(
                 service_code=code,
-                name=code.replace("_", " ").title(),
-                description=f"Pytest {code} service",
-                service_type="AUTHENTICATION",
+                name=name,
+                description=description,
+                service_type=service_type,
                 status="ACTIVE",
             ))
         db.flush()
-        for code in service_codes:
+        for code, _name, _description, _service_type in production_service_catalogue:
             db.add(ApplicationService(
                 application_id="app_pytest",
                 service_code=code,

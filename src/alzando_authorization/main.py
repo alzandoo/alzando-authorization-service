@@ -3,7 +3,9 @@ from functools import lru_cache
 from uuid import UUID, uuid4
 
 import jwt
-from fastapi import BackgroundTasks, Depends, FastAPI, Form, Request
+from typing import Literal
+
+from fastapi import BackgroundTasks, Depends, FastAPI, Form, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -21,8 +23,11 @@ from alzando_authorization.password_recovery import (
     request_password_recovery,
 )
 from alzando_authorization.email_delivery import send_configured_email
-from alzando_authorization.email_verification import verify_email
-from alzando_authorization.phone_verification import verify_phone
+from alzando_authorization.audit import audited, list_events, mask_identifier
+from alzando_authorization.email_verification import resend_email_verification, verify_email
+from alzando_authorization.phone_verification import resend_phone_verification, verify_phone
+from alzando_authorization.rate_limit import RateLimiter, client_ip
+from alzando_authorization.scopes import SCOPE_TO_SERVICE
 from alzando_authorization.otp import request_otp, verify_otp
 from alzando_authorization.database import engine, get_db
 from alzando_authorization.models import (
@@ -47,6 +52,7 @@ from alzando_authorization.schemas import (
     PasswordResetRequest,
     EmailVerificationRequest,
     PhoneVerificationRequest,
+    ResendVerificationRequest,
     OtpRequest,
     OtpVerifyRequest,
     MfaChallengeRequest,
@@ -89,18 +95,20 @@ def token_service() -> AccessTokenService:
 def create_app() -> FastAPI:
     app = FastAPI(title="Alzando Authorization Service", version="0.1.0")
     basic_auth = HTTPBasic(auto_error=False)
-    service_scopes = {
-        "authorization:manage": "AUTHORIZATION",
-        "authorization:check": "AUTHORIZATION",
-        "authentication:signup": "SIGNUP",
-        "authentication:login": "LOGIN",
-        "authentication:recovery": "PASSWORD_RECOVERY",
-        "authentication:verify": "EMAIL_VERIFICATION",
-        "authentication:verify_phone": "PHONE_VERIFICATION",
-        "authentication:otp": "OTP",
-        "authentication:mfa": "MFA",
-        "authentication:token": "TOKEN",
-    }
+    service_scopes = SCOPE_TO_SERVICE
+    limiter = RateLimiter()
+
+    def throttle(request: Request, bucket: str) -> None:
+        limiter.enforce(
+            f"ip:{bucket}:{client_ip(request)}", settings.rate_limit_ip_per_minute, 60
+        )
+
+    def throttle_identifier(request: Request, bucket: str, application_id: str, identifier: str) -> None:
+        limiter.enforce(
+            f"id:{bucket}:{application_id}:{identifier.strip().lower()}:{client_ip(request)}",
+            settings.rate_limit_identifier_attempts,
+            settings.rate_limit_identifier_window_seconds,
+        )
 
     @app.middleware("http")
     async def context_middleware(request: Request, call_next: Callable):
@@ -113,12 +121,13 @@ def create_app() -> FastAPI:
         def dependency(request: Request, db: Session = Depends(get_db)) -> str:
             application_id = None
             # Development-only identity simulation for quick local API exploration.
-            if settings.app_env.lower() == "development":
+            if settings.app_env.lower() == "development" and settings.allow_dev_identity_header:
                 dev_application_id = request.headers.get("X-Dev-Application-Id")
                 if dev_application_id and (
                     required_scope != "platform:manage" or dev_application_id == "alzando_platform"
                 ):
                     application_id = dev_application_id
+                    request.state.client_id = "dev-identity"
 
             if application_id is None:
                 header = request.headers.get("Authorization", "")
@@ -133,6 +142,7 @@ def create_app() -> FastAPI:
                 if required_scope not in scopes:
                     raise ServiceError("FORBIDDEN", "The access token does not grant the required scope.", 403)
                 application_id = claims["application_id"]
+                request.state.client_id = claims.get("client_id")
 
             if required_scope == "platform:manage":
                 if application_id != "alzando_platform":
@@ -167,6 +177,8 @@ def create_app() -> FastAPI:
             "error": {"code": exc.code, "message": exc.message},
             "request_id": getattr(request.state, "request_id", f"req_{uuid4().hex}"),
         })
+        for name, value in exc.headers.items():
+            response.headers[name] = value
         if request.url.path.startswith(("/api/v1/auth/", "/api/v1/tokens")):
             response.headers["Cache-Control"] = "no-store"
         return response
@@ -211,6 +223,8 @@ def create_app() -> FastAPI:
         credentials: HTTPBasicCredentials | None = Depends(basic_auth),
         db: Session = Depends(get_db),
     ):
+        throttle(request, "oauth_token")
+
         def oauth_error(error: str, status_code: int):
             response = JSONResponse(status_code=status_code, content={"error": error})
             response.headers["Cache-Control"] = "no-store"
@@ -306,7 +320,10 @@ def create_app() -> FastAPI:
             raise ServiceError("INVALID_REQUEST", "At least one application field must be provided.", 422)
         if any(changes.get(field) is None for field in ("name", "status", "owner") if field in changes):
             raise ServiceError("INVALID_REQUEST", "Name, status, and owner cannot be null.", 422)
-        application = update_application(db, application_id, changes)
+        with audited(
+            db, request, application_id, "APPLICATION_UPDATED", details={"fields": sorted(changes)}
+        ):
+            application = update_application(db, application_id, changes)
         return success(request, "APPLICATION_UPDATED", {
             "application_id": application.application_id,
             "name": application.name,
@@ -335,7 +352,9 @@ def create_app() -> FastAPI:
         _: str = Depends(require_scope("platform:manage")),
         db: Session = Depends(get_db),
     ):
-        count = replace_application_services(db, application_id, body)
+        throttle(request, "platform")
+        with audited(db, request, application_id, "APPLICATION_SERVICES_UPDATED"):
+            count = replace_application_services(db, application_id, body)
         return success(request, "CONFIGURATION_UPDATED", {
             "application_id": application_id,
             "services_updated": count,
@@ -350,7 +369,12 @@ def create_app() -> FastAPI:
         application_id: str = Depends(require_scope("authentication:signup")),
         db: Session = Depends(get_db),
     ):
-        result = create_authentication_account(db, application_id, body)
+        throttle(request, "signup")
+        with audited(
+            db, request, application_id, "ACCOUNT_SIGNUP", details={"identifier": mask_identifier(body.email)}
+        ) as event:
+            result = create_authentication_account(db, application_id, body)
+            event.account_reference = result["data"]["account_reference"]
         deliveries = result.get("deliveries", [])
         if result.get("delivery"):
             deliveries = [*deliveries, result["delivery"]]
@@ -367,7 +391,15 @@ def create_app() -> FastAPI:
         application_id: str = Depends(require_scope("authentication:login")),
         db: Session = Depends(get_db),
     ):
-        result = authenticate_user(db, application_id, body)
+        throttle(request, "login")
+        throttle_identifier(request, "login", application_id, body.identifier)
+        with audited(
+            db, request, application_id, "AUTH_LOGIN",
+            details={"identifier": mask_identifier(body.identifier)},
+        ) as event:
+            result = authenticate_user(db, application_id, body, failure_tracker=limiter)
+            event.account_reference = result["data"].get("account_reference")
+            event.details["result"] = result["status"]
         response.headers["Cache-Control"] = "no-store"
         return success(request, result["status"], result["data"])
 
@@ -380,7 +412,13 @@ def create_app() -> FastAPI:
         application_id: str = Depends(require_scope("authentication:recovery")),
         db: Session = Depends(get_db),
     ):
-        result = request_password_recovery(db, application_id, body.identifier)
+        throttle(request, "recovery")
+        throttle_identifier(request, "recovery", application_id, body.identifier)
+        with audited(
+            db, request, application_id, "PASSWORD_RECOVERY_REQUESTED",
+            details={"identifier": mask_identifier(body.identifier)},
+        ):
+            result = request_password_recovery(db, application_id, body.identifier)
         if result.get("delivery"):
             background_tasks.add_task(send_configured_email, **result["delivery"])
         response.headers["Cache-Control"] = "no-store"
@@ -394,7 +432,9 @@ def create_app() -> FastAPI:
         application_id: str = Depends(require_scope("authentication:recovery")),
         db: Session = Depends(get_db),
     ):
-        result = complete_password_reset(db, application_id, body)
+        throttle(request, "recovery")
+        with audited(db, request, application_id, "PASSWORD_RESET"):
+            result = complete_password_reset(db, application_id, body)
         response.headers["Cache-Control"] = "no-store"
         return success(request, "PASSWORD_RESET", result)
 
@@ -406,9 +446,51 @@ def create_app() -> FastAPI:
         application_id: str = Depends(require_scope("authentication:verify")),
         db: Session = Depends(get_db),
     ):
-        result = verify_email(db, application_id, body.verification_reference, body.code)
+        throttle(request, "verify")
+        with audited(db, request, application_id, "EMAIL_VERIFIED"):
+            result = verify_email(db, application_id, body.verification_reference, body.code)
         response.headers["Cache-Control"] = "no-store"
         return success(request, "VERIFIED", result)
+
+    def verification_payload(channel: str, result: dict) -> dict:
+        return {"channel": channel, **{key: value for key, value in result.items() if key != "delivery"}}
+
+    @app.post("/api/v1/auth/verify/email/resend")
+    def post_resend_email_verification(
+        body: ResendVerificationRequest,
+        request: Request,
+        response: Response,
+        background_tasks: BackgroundTasks,
+        application_id: str = Depends(require_scope("authentication:verify")),
+        db: Session = Depends(get_db),
+    ):
+        throttle(request, "verify")
+        with audited(
+            db, request, application_id, "EMAIL_VERIFICATION_RESENT",
+            account_reference=body.account_reference,
+        ):
+            result = resend_email_verification(db, application_id, body.account_reference)
+        if result.get("delivery"):
+            background_tasks.add_task(send_configured_email, **result["delivery"])
+        response.headers["Cache-Control"] = "no-store"
+        return success(request, "VERIFICATION_RESENT", verification_payload("EMAIL", result))
+
+    @app.post("/api/v1/auth/verify/phone/resend")
+    def post_resend_phone_verification(
+        body: ResendVerificationRequest,
+        request: Request,
+        response: Response,
+        application_id: str = Depends(require_scope("authentication:verify_phone")),
+        db: Session = Depends(get_db),
+    ):
+        throttle(request, "verify")
+        with audited(
+            db, request, application_id, "PHONE_VERIFICATION_RESENT",
+            account_reference=body.account_reference,
+        ):
+            result = resend_phone_verification(db, application_id, body.account_reference)
+        response.headers["Cache-Control"] = "no-store"
+        return success(request, "VERIFICATION_RESENT", verification_payload("PHONE", result))
 
     @app.post("/api/v1/auth/verify/phone")
     def post_verify_phone(
@@ -418,7 +500,9 @@ def create_app() -> FastAPI:
         application_id: str = Depends(require_scope("authentication:verify_phone")),
         db: Session = Depends(get_db),
     ):
-        result = verify_phone(db, application_id, body.verification_reference, body.code)
+        throttle(request, "verify")
+        with audited(db, request, application_id, "PHONE_VERIFIED"):
+            result = verify_phone(db, application_id, body.verification_reference, body.code)
         response.headers["Cache-Control"] = "no-store"
         return success(request, "VERIFIED", result)
 
@@ -431,7 +515,12 @@ def create_app() -> FastAPI:
         application_id: str = Depends(require_scope("authentication:otp")),
         db: Session = Depends(get_db),
     ):
-        result = request_otp(db, application_id, body)
+        throttle(request, "otp")
+        with audited(
+            db, request, application_id, "OTP_REQUESTED", account_reference=body.account_reference,
+            details={"purpose": body.purpose, "channel": body.channel},
+        ):
+            result = request_otp(db, application_id, body)
         if result.get("delivery"):
             background_tasks.add_task(send_configured_email, **result["delivery"])
         response.headers["Cache-Control"] = "no-store"
@@ -445,7 +534,11 @@ def create_app() -> FastAPI:
         application_id: str = Depends(require_scope("authentication:otp")),
         db: Session = Depends(get_db),
     ):
-        result = verify_otp(db, application_id, body.challenge_reference, body.otp)
+        throttle(request, "otp")
+        with audited(db, request, application_id, "OTP_VERIFIED") as event:
+            result = verify_otp(db, application_id, body.challenge_reference, body.otp)
+            event.account_reference = result.get("account_reference")
+            event.details["purpose"] = result.get("purpose")
         response.headers["Cache-Control"] = "no-store"
         return success(request, "VERIFIED", result)
 
@@ -458,26 +551,29 @@ def create_app() -> FastAPI:
         application_id: str = Depends(require_scope("authentication:mfa")),
         db: Session = Depends(get_db),
     ):
-        grant = db.scalar(select(AuthenticationGrant).where(
-            AuthenticationGrant.application_id == application_id,
-            AuthenticationGrant.authentication_reference == body.authentication_reference,
-        ).with_for_update())
-        if (
-            grant is None or grant.used_at is not None or grant.expires_at <= utc_now()
-            or not grant.mfa_required or grant.mfa_verified
-        ):
-            raise ServiceError("INVALID_AUTHENTICATION_GRANT", "Authentication grant is invalid or expired.", 400)
-        account = db.scalar(select(AuthenticationAccount).where(
-            AuthenticationAccount.application_id == application_id,
-            AuthenticationAccount.account_reference == grant.account_reference,
-        ).with_for_update())
-        if account is None or account.status != "ACTIVE":
-            raise ServiceError("ACCOUNT_UNAVAILABLE", "The account is not active.", 401)
-        result = request_otp(db, application_id, OtpRequest(
-            account_reference=grant.account_reference,
-            purpose="MFA",
-            channel=body.channel,
-        ), authentication_reference=grant.authentication_reference)
+        throttle(request, "mfa")
+        with audited(db, request, application_id, "MFA_CHALLENGE_REQUESTED") as event:
+            grant = db.scalar(select(AuthenticationGrant).where(
+                AuthenticationGrant.application_id == application_id,
+                AuthenticationGrant.authentication_reference == body.authentication_reference,
+            ).with_for_update())
+            if (
+                grant is None or grant.used_at is not None or grant.expires_at <= utc_now()
+                or not grant.mfa_required or grant.mfa_verified
+            ):
+                raise ServiceError("INVALID_AUTHENTICATION_GRANT", "Authentication grant is invalid or expired.", 400)
+            account = db.scalar(select(AuthenticationAccount).where(
+                AuthenticationAccount.application_id == application_id,
+                AuthenticationAccount.account_reference == grant.account_reference,
+            ).with_for_update())
+            if account is None or account.status != "ACTIVE":
+                raise ServiceError("ACCOUNT_UNAVAILABLE", "The account is not active.", 401)
+            event.account_reference = grant.account_reference
+            result = request_otp(db, application_id, OtpRequest(
+                account_reference=grant.account_reference,
+                purpose="MFA",
+                channel=body.channel,
+            ), authentication_reference=grant.authentication_reference)
         if result.get("delivery"):
             background_tasks.add_task(send_configured_email, **result["delivery"])
         response.headers["Cache-Control"] = "no-store"
@@ -491,22 +587,25 @@ def create_app() -> FastAPI:
         application_id: str = Depends(require_scope("authentication:mfa")),
         db: Session = Depends(get_db),
     ):
-        result = verify_otp(
-            db, application_id, body.challenge_reference, body.otp, expected_purpose="MFA"
-        )
-        authentication_reference = result.get("authentication_reference")
-        grant = db.scalar(select(AuthenticationGrant).where(
-            AuthenticationGrant.application_id == application_id,
-            AuthenticationGrant.authentication_reference == authentication_reference,
-        ).with_for_update()) if authentication_reference else None
-        if (
-            grant is None or grant.used_at is not None or grant.expires_at <= utc_now()
-            or not grant.mfa_required or grant.account_reference != result["account_reference"]
-        ):
-            raise ServiceError("INVALID_AUTHENTICATION_GRANT", "Authentication grant is invalid or expired.", 400)
-        grant.mfa_verified = True
-        db.commit()
-        result["authentication_reference"] = authentication_reference
+        throttle(request, "mfa")
+        with audited(db, request, application_id, "MFA_VERIFIED") as event:
+            result = verify_otp(
+                db, application_id, body.challenge_reference, body.otp, expected_purpose="MFA"
+            )
+            authentication_reference = result.get("authentication_reference")
+            grant = db.scalar(select(AuthenticationGrant).where(
+                AuthenticationGrant.application_id == application_id,
+                AuthenticationGrant.authentication_reference == authentication_reference,
+            ).with_for_update()) if authentication_reference else None
+            if (
+                grant is None or grant.used_at is not None or grant.expires_at <= utc_now()
+                or not grant.mfa_required or grant.account_reference != result["account_reference"]
+            ):
+                raise ServiceError("INVALID_AUTHENTICATION_GRANT", "Authentication grant is invalid or expired.", 400)
+            event.account_reference = result["account_reference"]
+            grant.mfa_verified = True
+            db.commit()
+            result["authentication_reference"] = authentication_reference
         response.headers["Cache-Control"] = "no-store"
         return success(request, "MFA_VERIFIED", result)
 
@@ -518,7 +617,11 @@ def create_app() -> FastAPI:
         application_id: str = Depends(require_scope("authentication:token")),
         db: Session = Depends(get_db),
     ):
-        data = issue_user_tokens(db, application_id, body.authentication_reference, token_service())
+        throttle(request, "token")
+        with audited(db, request, application_id, "TOKENS_ISSUED") as event:
+            data = issue_user_tokens(db, application_id, body.authentication_reference, token_service())
+            event.account_reference = data["account_reference"]
+            event.details["session_id"] = data["session_id"]
         response.headers["Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
         return success(request, "TOKENS_ISSUED", data)
@@ -531,7 +634,11 @@ def create_app() -> FastAPI:
         application_id: str = Depends(require_scope("authentication:token")),
         db: Session = Depends(get_db),
     ):
-        data = refresh_user_tokens(db, application_id, body.refresh_token, token_service())
+        throttle(request, "token")
+        with audited(db, request, application_id, "TOKENS_REFRESHED") as event:
+            data = refresh_user_tokens(db, application_id, body.refresh_token, token_service())
+            event.account_reference = data["account_reference"]
+            event.details["session_id"] = data["session_id"]
         response.headers["Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
         return success(request, "TOKENS_REFRESHED", data)
@@ -544,7 +651,9 @@ def create_app() -> FastAPI:
         application_id: str = Depends(require_scope("authentication:token")),
         db: Session = Depends(get_db),
     ):
-        revoke_user_token(db, application_id, body.refresh_token)
+        throttle(request, "token")
+        with audited(db, request, application_id, "TOKEN_REVOKED"):
+            revoke_user_token(db, application_id, body.refresh_token)
         response.headers["Cache-Control"] = "no-store"
         return success(request, "TOKEN_REVOKED", {"revoked": True})
 
@@ -555,7 +664,8 @@ def create_app() -> FastAPI:
         application_id: str = Depends(require_scope("authorization:manage")),
         db: Session = Depends(get_db),
     ):
-        role = create_role(db, application_id, body.name, body.description)
+        with audited(db, request, application_id, "ROLE_CREATED", details={"name": body.name}):
+            role = create_role(db, application_id, body.name, body.description)
         return success(request, "ROLE_CREATED", {
             "role_id": str(role.id), "name": role.name, "description": role.description,
         })
@@ -567,9 +677,10 @@ def create_app() -> FastAPI:
         application_id: str = Depends(require_scope("authorization:manage")),
         db: Session = Depends(get_db),
     ):
-        permission = create_permission(
-            db, application_id, body.key, body.description, body.resource, body.action
-        )
+        with audited(db, request, application_id, "PERMISSION_CREATED", details={"key": body.key}):
+            permission = create_permission(
+                db, application_id, body.key, body.description, body.resource, body.action
+            )
         return success(request, "PERMISSION_CREATED", {
             "permission_id": str(permission.id), "key": permission.key,
             "description": permission.description, "resource": permission.resource,
@@ -588,7 +699,10 @@ def create_app() -> FastAPI:
             parsed_role_id = UUID(role_id)
         except ValueError as exc:
             raise ServiceError("INVALID_ROLE_ID", "Role ID is invalid.", 422) from exc
-        count = replace_role_permissions(db, application_id, parsed_role_id, body.permission_ids)
+        with audited(
+            db, request, application_id, "ROLE_PERMISSIONS_SET", details={"role_id": role_id}
+        ):
+            count = replace_role_permissions(db, application_id, parsed_role_id, body.permission_ids)
         return success(request, "ROLE_PERMISSIONS_UPDATED", {
             "role_id": role_id, "permission_count": count,
         })
@@ -601,7 +715,10 @@ def create_app() -> FastAPI:
         application_id: str = Depends(require_scope("authorization:manage")),
         db: Session = Depends(get_db),
     ):
-        count = replace_user_roles(db, application_id, user_reference, body.role_ids)
+        with audited(
+            db, request, application_id, "USER_ROLES_SET", details={"user_reference": user_reference}
+        ):
+            count = replace_user_roles(db, application_id, user_reference, body.role_ids)
         return success(request, "USER_ROLES_UPDATED", {
             "user_reference": user_reference, "role_count": count,
         })
@@ -620,6 +737,26 @@ def create_app() -> FastAPI:
             "permission": body.permission,
             "resource": body.resource.model_dump() if body.resource else None,
         })
+
+    @app.get("/api/v1/audit/events")
+    def get_audit_events(
+        request: Request,
+        response: Response,
+        event_type: str | None = Query(default=None, max_length=64),
+        outcome: Literal["SUCCESS", "FAILURE"] | None = None,
+        account_reference: str | None = Query(default=None, max_length=96),
+        limit: int = Query(default=50, ge=1, le=200),
+        cursor: str | None = Query(default=None, max_length=32),
+        application_id: str = Depends(require_scope("audit:read")),
+        db: Session = Depends(get_db),
+    ):
+        throttle(request, "audit")
+        data = list_events(
+            db, application_id, event_type=event_type, outcome=outcome,
+            account_reference=account_reference, limit=limit, cursor=cursor,
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return success(request, "OK", data)
 
     return app
 

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from alzando_authorization.clients import add_application_client
 from alzando_authorization.models import Application, ApplicationClient, ApplicationService, Service
 from alzando_authorization.schemas import RegisterApplication, ReplaceApplicationServices
+from alzando_authorization.scopes import default_scopes_for_services
 from alzando_authorization.service import ServiceError
 
 
@@ -39,25 +40,7 @@ def register_application(db: Session, request: RegisterApplication) -> tuple[App
         ))
 
     # Service configuration is enforced when a token is issued and again on API calls.
-    client_scopes = []
-    if "AUTHORIZATION" in requested:
-        client_scopes.append("authorization:check")
-    if "SIGNUP" in requested:
-        client_scopes.append("authentication:signup")
-    if "LOGIN" in requested:
-        client_scopes.append("authentication:login")
-    if "PASSWORD_RECOVERY" in requested:
-        client_scopes.append("authentication:recovery")
-    if "EMAIL_VERIFICATION" in requested:
-        client_scopes.append("authentication:verify")
-    if "PHONE_VERIFICATION" in requested:
-        client_scopes.append("authentication:verify_phone")
-    if "OTP" in requested:
-        client_scopes.append("authentication:otp")
-    if "MFA" in requested:
-        client_scopes.append("authentication:mfa")
-    if "TOKEN" in requested:
-        client_scopes.append("authentication:token")
+    client_scopes = default_scopes_for_services(requested)
     client, client_secret = add_application_client(
         db, application.application_id, client_scopes, request.client_type
     )
@@ -138,6 +121,11 @@ def replace_application_services(
     if unknown:
         raise ServiceError("UNKNOWN_SERVICE", f"Unknown or unavailable service code(s): {', '.join(sorted(unknown))}.", 422)
 
+    previously_enabled = set(db.scalars(select(ApplicationService.service_code).where(
+        ApplicationService.application_id == application_id,
+        ApplicationService.enabled.is_(True),
+    )).all())
+
     db.execute(delete(ApplicationService).where(ApplicationService.application_id == application_id))
     db.add_all(
         ApplicationService(
@@ -148,5 +136,17 @@ def replace_application_services(
         )
         for service in db.scalars(select(Service).order_by(Service.service_code)).all()
     )
+
+    # Clients keep the scopes they were issued, so a service enabled after registration would be
+    # unusable until its scopes are added. Grant scopes only for newly enabled services; nothing
+    # is removed because disabled services are already rejected at request time.
+    newly_enabled = {code for code, item in requested.items() if item.enabled} - previously_enabled
+    new_scopes = set(default_scopes_for_services(newly_enabled))
+    if new_scopes:
+        for client in db.scalars(select(ApplicationClient).where(
+            ApplicationClient.application_id == application_id,
+            ApplicationClient.is_active.is_(True),
+        )).all():
+            client.scopes = sorted(set(client.scopes) | new_scopes)
     db.commit()
     return len(requested)

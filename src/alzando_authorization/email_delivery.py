@@ -32,9 +32,9 @@ def send_configured_email(recipient: str, subject: str, body: str) -> None:
                 context=ssl.create_default_context(),
             ) as client:
                 _login_and_send(client, message)
-    except Exception:
+    except Exception as exc:
         # Avoid logging the destination address or message contents, which can contain codes.
-        logger.error("Configured email delivery failed.")
+        logger.error("Configured email delivery failed (%s).", type(exc).__name__)
 
 
 def _login_and_send(client: smtplib.SMTP, message: EmailMessage) -> None:

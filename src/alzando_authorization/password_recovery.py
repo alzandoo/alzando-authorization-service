@@ -8,7 +8,12 @@ from sqlalchemy.orm import Session
 from alzando_authorization.authentication import password_hasher
 from alzando_authorization.challenge_security import challenge_secret, code_digest
 from alzando_authorization.config import settings
-from alzando_authorization.models import AuthenticationAccount, PasswordRecoveryChallenge, utc_now
+from alzando_authorization.models import (
+    AuthenticationAccount,
+    PasswordRecoveryChallenge,
+    UserSession,
+    utc_now,
+)
 from alzando_authorization.schemas import PasswordResetRequest
 from alzando_authorization.service import ServiceError
 from alzando_authorization.email_delivery import email_delivery_configured
@@ -67,14 +72,16 @@ def request_password_recovery(db: Session, application_id: str, identifier: str)
     db.add(challenge)
     db.commit()
 
-    if settings.app_env.lower() == "development":
+    is_development = settings.app_env.lower() == "development"
+    if is_development:
         response["data"].update({
             "recovery_reference": recovery_reference,
             "verification_code": code,
             "expires_in_seconds": settings.password_recovery_ttl_seconds,
             "development_only": True,
         })
-    else:
+    # Use SMTP in development when configured, while preserving the code-based local fallback.
+    if email_delivery_configured():
         response["delivery"] = {
             "recipient": account.email,
             "subject": "Password recovery",
@@ -125,6 +132,12 @@ def complete_password_reset(db: Session, application_id: str, request: PasswordR
     if account.status != "PENDING_VERIFICATION":
         account.status = "ACTIVE"
     challenge.used_at = now
+    # A password reset must end every existing session so a stolen refresh token cannot outlive it.
+    db.execute(update(UserSession).where(
+        UserSession.application_id == application_id,
+        UserSession.account_reference == account.account_reference,
+        UserSession.revoked_at.is_(None),
+    ).values(revoked_at=now))
     db.execute(update(PasswordRecoveryChallenge).where(
         PasswordRecoveryChallenge.application_id == application_id,
         PasswordRecoveryChallenge.account_reference == account.account_reference,

@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from alzando_authorization.config import settings
+from alzando_authorization.rate_limit import RateLimiter
 from alzando_authorization.models import (
     ApplicationService,
     AuthenticationAccount,
@@ -94,7 +95,9 @@ def signup(db: Session, application_id: str, request: SignupRequest) -> dict:
     return result
 
 
-def login(db: Session, application_id: str, request: LoginRequest) -> dict:
+def login(
+    db: Session, application_id: str, request: LoginRequest, failure_tracker: RateLimiter | None = None
+) -> dict:
     identifier = request.identifier.strip().lower()
     account = db.scalar(select(AuthenticationAccount).where(
         AuthenticationAccount.application_id == application_id,
@@ -103,9 +106,24 @@ def login(db: Session, application_id: str, request: LoginRequest) -> dict:
 
     if account is None:
         _verify_password(_DUMMY_PASSWORD_HASH, request.password)
+        # Mirror the lockout progression of real accounts so the response sequence for an unknown
+        # identifier is indistinguishable from a known one (no account enumeration).
+        if failure_tracker is not None:
+            attempts = failure_tracker.hit(
+                f"unknown-login:{application_id}:{identifier}",
+                settings.rate_limit_identifier_window_seconds,
+            )
+            if attempts == MAX_FAILED_PASSWORD_ATTEMPTS:
+                raise ServiceError("RECOVERY_REQUIRED", "Password recovery is required.", 401)
+            if attempts > MAX_FAILED_PASSWORD_ATTEMPTS:
+                raise ServiceError(
+                    "RECOVERY_REQUIRED", "Password recovery is required before another login attempt.", 401
+                )
         raise ServiceError("AUTHENTICATION_FAILED", "Authentication failed.", 401)
 
     if account.recovery_required:
+        # Spend the same hashing time as any other failed login so timing does not reveal the lock.
+        _verify_password(_DUMMY_PASSWORD_HASH, request.password)
         raise ServiceError("RECOVERY_REQUIRED", "Password recovery is required before another login attempt.", 401)
 
     if not _verify_password(account.password_hash, request.password):

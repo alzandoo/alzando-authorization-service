@@ -104,7 +104,7 @@ def request_otp(
     result = {"status": "OTP_REQUESTED", "data": data}
     if settings.app_env.lower() == "development":
         data.update({"otp": code, "development_only": True})
-    elif account is not None and request.channel == "EMAIL":
+    if account is not None and request.channel == "EMAIL" and email_delivery_configured():
         result["delivery"] = {
             "recipient": account.email,
             "subject": "Your Alzando verification code",

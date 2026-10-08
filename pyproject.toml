@@ -28,6 +28,16 @@ test = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.pytest.ini_options]
+log_file = "pytest.log"
+log_file_level = "INFO"
+log_file_mode = "w"
+log_format = "%(asctime)s %(levelname)s %(name)s %(message)s"
+log_date_format = "%Y-%m-%d %H:%M:%S"
+markers = [
+  "integration: tests requiring a disposable PostgreSQL database",
+]
+
 [tool.ruff]
 line-length = 110
 target-version = "py312"

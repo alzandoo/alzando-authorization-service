@@ -8,10 +8,14 @@ from alzando_authorization.models import Permission, Role, RolePermission, UserR
 
 
 class ServiceError(Exception):
-    def __init__(self, code: str, message: str, http_status: int):
+    def __init__(
+        self, code: str, message: str, http_status: int, headers: dict[str, str] | None = None
+    ):
+        super().__init__(code, message, http_status)
         self.code = code
         self.message = message
         self.http_status = http_status
+        self.headers = headers or {}
 
 
 def create_role(db: Session, application_id: str, name: str, description: str | None) -> Role:
