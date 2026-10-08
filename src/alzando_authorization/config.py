@@ -31,12 +31,16 @@ class Settings(BaseSettings):
     phone_verification_ttl_seconds: int = 600
     otp_ttl_seconds: int = 300
     otp_resend_interval_seconds: int = 60
+    brevo_api_key: str | None = None
+    brevo_from_email: str | None = None
+    brevo_from_name: str = "Alzando"
     smtp_host: str | None = None
     smtp_port: int = 587
     smtp_username: str | None = None
     smtp_password: str | None = None
     smtp_from_email: str | None = None
     smtp_starttls: bool = True
+    
 
 
 settings = Settings()
