@@ -37,6 +37,7 @@ from alzando_authorization.models import (
     AuthenticationAccount,
     AuthenticationGrant,
     Service,
+    UserSession,
     utc_now,
 )
 from alzando_authorization.schemas import (
@@ -165,7 +166,73 @@ def create_app() -> FastAPI:
                 if not enabled:
                     raise ServiceError("SERVICE_NOT_ENABLED", f"{service_code.title()} is not enabled for this application.", 403)
             return application_id
+        return dependency
 
+    def require_user_session():
+        def dependency(
+            request: Request,
+            db: Session = Depends(get_db),
+        ) -> dict:
+            header = request.headers.get("Authorization", "")
+            scheme, _, credential = header.partition(" ")
+
+            if scheme.lower() != "bearer" or not credential:
+                raise ServiceError(
+                    "UNAUTHENTICATED",
+                    "A valid user access token is required.",
+                    401,
+                )
+
+            try:
+                claims = token_service().verify_user(credential)
+            except (jwt.PyJWTError, ValueError, OSError, RuntimeError):
+                raise ServiceError(
+                    "UNAUTHENTICATED",
+                    "User access token is invalid or expired.",
+                    401,
+                ) from None
+
+            application_id = claims["application_id"]
+            account_reference = claims["sub"]
+            session_id = claims["sid"]
+
+            session = db.get(
+                UserSession,
+                (application_id, session_id),
+            )
+
+            if (
+                session is None
+                or session.account_reference != account_reference
+                or session.revoked_at is not None
+                or session.refresh_expires_at <= utc_now()
+            ):
+                raise ServiceError(
+                    "UNAUTHENTICATED",
+                    "User session is invalid, expired, or revoked.",
+                    401,
+                )
+
+            account = db.get(
+                AuthenticationAccount,
+                (application_id, account_reference),
+            )
+            application = db.get(Application, application_id)
+
+            if account is None or account.status != "ACTIVE":
+                raise ServiceError(
+                    "UNAUTHENTICATED",
+                    "User account is unavailable.",
+                    401,
+                )
+
+            if application is None or application.status != "ACTIVE":
+                raise ServiceError(
+                    "UNAUTHENTICATED",
+                    "Application is unavailable.",
+                    401,
+                )
+            return claims
         return dependency
 
     @app.exception_handler(ServiceError)
@@ -656,6 +723,25 @@ def create_app() -> FastAPI:
             revoke_user_token(db, application_id, body.refresh_token)
         response.headers["Cache-Control"] = "no-store"
         return success(request, "TOKEN_REVOKED", {"revoked": True})
+
+    @app.get("/api/v1/auth/me")
+    def get_authenticated_user(
+        request: Request,
+        response: Response,
+        claims: dict = Depends(require_user_session()),
+    ):
+        response.headers["Cache-Control"] = "no-store"
+
+        return success(
+            request,
+            "AUTHENTICATED_USER",
+            {
+                "account_reference": claims["sub"],
+                "application_id": claims["application_id"],
+                "session_id": claims["sid"],
+                "mfa_authenticated": "otp" in claims["amr"],
+            },
+        )
 
     @app.post("/api/v1/authorization/roles", status_code=201)
     def post_role(

@@ -106,6 +106,26 @@ def test_signup_login_issue_refresh_and_revoke_user_tokens(api, enable_services,
     assert refresh.status_code == 200, refresh.text
     assert refresh.json()["status"] == "TOKENS_REFRESHED"
     refreshed_tokens = refresh.json()["data"]
+
+    # Verify that the refreshed access token works before revocation.
+    me = http_request(
+        client,
+        "GET",
+        "/api/v1/auth/me",
+        description="Access the protected user endpoint with the current user access token.",
+        expectations="HTTP 200; the authenticated account and session are returned.",
+        headers={
+            "Authorization": f"Bearer {refreshed_tokens['access_token']}"
+        },
+    )
+    assert me.status_code == 200, me.text
+    assert me.json()["status"] == "AUTHENTICATED_USER"
+    assert (
+        me.json()["data"]["account_reference"]
+        == refreshed_tokens["account_reference"]
+    )
+    assert me.json()["data"]["session_id"] == refreshed_tokens["session_id"]
+
     assert refreshed_tokens["access_token"]
     assert refreshed_tokens["refresh_token"]
     assert refreshed_tokens["refresh_token"] != issued_tokens["refresh_token"]
@@ -122,6 +142,21 @@ def test_signup_login_issue_refresh_and_revoke_user_tokens(api, enable_services,
     assert revoke.status_code == 200, revoke.text
     assert revoke.json()["status"] == "TOKEN_REVOKED"
     assert revoke.json()["data"]["revoked"] is True
+
+    # A revoked session must no longer accept its access token.
+    access_after_revoke = http_request(
+        client,
+        "GET",
+        "/api/v1/auth/me",
+        description="Try to reuse the access token after its session has been revoked.",
+        expectations="HTTP 401; a revoked session cannot access the protected user endpoint.",
+        headers={
+            "Authorization": f"Bearer {refreshed_tokens['access_token']}"
+        },
+    )
+    assert access_after_revoke.status_code == 401, access_after_revoke.text
+    assert access_after_revoke.json()["status"] == "UNAUTHENTICATED"
+
 
     refresh_revoked = http_request(
         client,
