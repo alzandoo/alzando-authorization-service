@@ -1,3 +1,8 @@
+from pathlib import Path
+
+from cryptography.exceptions import UnsupportedAlgorithm
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -100,6 +105,37 @@ class Settings(BaseSettings):
         if len(self.challenge_hmac_secret) < 32:
             raise ValueError(
                 "CHALLENGE_HMAC_SECRET must be at least 32 characters in production"
+            )
+
+        # Validate the configured RSA private key used for RS256 signing.
+        try:
+            private_key_path = Path(self.jwt_private_key_file)
+            private_key_data = private_key_path.read_bytes()
+
+            private_key = serialization.load_pem_private_key(
+                private_key_data,
+                password=None,
+            )
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+            UnsupportedAlgorithm,
+        ) as exc:
+            raise ValueError(
+                "JWT_PRIVATE_KEY_FILE must point to a readable, "
+                "valid, unencrypted PEM private key in production"
+            ) from exc
+
+        if not isinstance(private_key, rsa.RSAPrivateKey):
+            raise ValueError(
+                "JWT_PRIVATE_KEY_FILE must contain an RSA private key "
+                "in production"
+            )
+
+        if private_key.key_size < 2048:
+            raise ValueError(
+                "JWT RSA private key must be at least 2048 bits in production"
             )
 
         return self
