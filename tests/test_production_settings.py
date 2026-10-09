@@ -25,6 +25,20 @@ def create_private_key_file(tmp_path, key_size=2048):
     return str(key_path)
 
 
+
+def create_public_key_file(tmp_path, private_key, filename="public.pem"):
+    public_key_path = tmp_path / filename
+
+    public_key_path.write_bytes(
+        private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+
+    return str(public_key_path)
+
+
 def test_production_rejects_dev_identity_header():
     with pytest.raises(
         ValidationError,
@@ -156,3 +170,97 @@ def test_production_rejects_weak_rsa_private_key(tmp_path):
             jwt_private_key_file=key_path,
             challenge_hmac_secret="x" * 32,
         )
+
+
+def test_production_accepts_matching_public_key(tmp_path):
+    private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048,
+    )
+
+    private_key_path = tmp_path / "private.pem"
+    private_key_path.write_bytes(
+        private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+
+    public_key_path = create_public_key_file(tmp_path, private_key)
+
+    settings = Settings(
+        app_env="production",
+        jwt_private_key_file=str(private_key_path),
+        jwt_public_key_file=public_key_path,
+        challenge_hmac_secret="x" * 32,
+    )
+
+    assert settings.jwt_public_key_file == public_key_path
+
+
+def test_production_rejects_missing_public_key_file(tmp_path):
+    private_key_path = create_private_key_file(tmp_path)
+
+    with pytest.raises(
+        ValidationError,
+        match="JWT_PUBLIC_KEY_FILE must point to a readable",
+    ):
+        Settings(
+            app_env="production",
+            jwt_private_key_file=private_key_path,
+            jwt_public_key_file=str(tmp_path / "missing-public.pem"),
+            challenge_hmac_secret="x" * 32,
+        )
+
+
+def test_production_rejects_mismatched_public_key(tmp_path):
+    private_key_path = create_private_key_file(tmp_path)
+
+    other_private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048,
+    )
+    public_key_path = create_public_key_file(
+        tmp_path,
+        other_private_key,
+        filename="other-public.pem",
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="must match JWT_PRIVATE_KEY_FILE",
+    ):
+        Settings(
+            app_env="production",
+            jwt_private_key_file=private_key_path,
+            jwt_public_key_file=public_key_path,
+            challenge_hmac_secret="x" * 32,
+        )
+
+
+def test_production_rejects_non_rsa_public_key(tmp_path):
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    private_key_path = create_private_key_file(tmp_path)
+    ed25519_key = ed25519.Ed25519PrivateKey.generate()
+
+    public_key_path = tmp_path / "ed25519-public.pem"
+    public_key_path.write_bytes(
+        ed25519_key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="must contain an RSA public key",
+    ):
+        Settings(
+            app_env="production",
+            jwt_private_key_file=private_key_path,
+            jwt_public_key_file=str(public_key_path),
+            challenge_hmac_secret="x" * 32,
+        )
+

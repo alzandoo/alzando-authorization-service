@@ -138,6 +138,40 @@ class Settings(BaseSettings):
                 "JWT RSA private key must be at least 2048 bits in production"
             )
 
+        
+        # Validate the optional public key used for JWT verification.
+        if self.jwt_public_key_file:
+            try:
+                public_key_path = Path(self.jwt_public_key_file)
+                public_key_data = public_key_path.read_bytes()
+                public_key = serialization.load_pem_public_key(public_key_data,)
+            except (OSError, ValueError, TypeError, UnsupportedAlgorithm,) as exc:
+                raise ValueError(
+                    "JWT_PUBLIC_KEY_FILE must point to a readable, "
+                    "valid PEM public key in production"
+                ) from exc
+
+            if not isinstance(public_key, rsa.RSAPublicKey):
+                raise ValueError(
+                    "JWT_PUBLIC_KEY_FILE must contain an RSA public key "
+                    "in production"
+                )
+
+            if public_key.key_size < 2048:
+                raise ValueError(
+                    "JWT RSA public key must be at least 2048 bits in production"
+                )
+
+            private_public_numbers = private_key.public_key().public_numbers()
+            configured_public_numbers = public_key.public_numbers()
+
+            if private_public_numbers != configured_public_numbers:
+                raise ValueError(
+                    "JWT_PUBLIC_KEY_FILE must match JWT_PRIVATE_KEY_FILE "
+                    "in production"
+                )
+
+
         return self
 
 
