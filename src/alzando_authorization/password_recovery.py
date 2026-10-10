@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from alzando_authorization.authentication import password_hasher
 from alzando_authorization.challenge_security import challenge_secret, code_digest
 from alzando_authorization.config import settings
+from alzando_authorization.email_delivery import email_delivery_configured
 from alzando_authorization.models import (
     AuthenticationAccount,
     PasswordRecoveryChallenge,
@@ -16,7 +17,7 @@ from alzando_authorization.models import (
 )
 from alzando_authorization.schemas import PasswordResetRequest
 from alzando_authorization.service import ServiceError
-from alzando_authorization.email_delivery import email_delivery_configured
+
 MAX_RECOVERY_CODE_ATTEMPTS = 5
 
 

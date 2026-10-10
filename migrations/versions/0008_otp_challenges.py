@@ -4,8 +4,8 @@ Revision ID: 0008_otp_challenges
 Revises: 0007_phone_verification
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0008_otp_challenges"
 down_revision = "0007_phone_verification"

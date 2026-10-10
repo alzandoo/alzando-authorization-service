@@ -186,7 +186,7 @@ def _require_purpose_enabled(db: Session, application_id: str, request: OtpReque
     )).all())
     missing = required_services - enabled
     if missing:
-        service = sorted(missing)[0]
+        service = min(missing)
         raise ServiceError("SERVICE_NOT_ENABLED", f"{service.title()} is not enabled for this application.", 403)
 
 

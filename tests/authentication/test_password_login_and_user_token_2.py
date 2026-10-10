@@ -10,6 +10,8 @@ accurate for password-only authentication.
 import jwt
 
 from alzando_authorization import main as main_module
+
+
 def test_password_login_issues_one_time_grant_and_password_only_amr(
     api, enable_services, create_test_account, login_user, issue_user_tokens, application_header
 ):

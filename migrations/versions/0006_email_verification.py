@@ -4,8 +4,8 @@ Revision ID: 0006_email_verification
 Revises: 0005_password_recovery
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0006_email_verification"
 down_revision = "0005_password_recovery"

@@ -1,7 +1,7 @@
-import alzando_authorization.registry as registry
 from types import SimpleNamespace
-from alzando_authorization.models import Application, ApplicationService
 
+from alzando_authorization import registry
+from alzando_authorization.models import Application, ApplicationService
 
 PLATFORM_HEADER = {"X-Dev-Application-Id": "alzando_platform"}
 
@@ -132,7 +132,7 @@ def test_registry_not_found_validation_and_platform_access(api):
 
 # APP-02: Verify that duplicate application IDs are rejected with HTTP 409.
 def test_registration_rejects_duplicate_application_id(api, monkeypatch):
-    client, sessions, _ = api
+    client, _, _ = api
     # Patch the token generator to produce a duplicate application_id
     monkeypatch.setattr(registry, "secrets", SimpleNamespace(token_urlsafe=lambda n: "pytest"))
     

@@ -4,8 +4,8 @@ Revision ID: 0010_audit_events
 Revises: 0009_user_sessions
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0010_audit_events"
 down_revision = "0009_user_sessions"

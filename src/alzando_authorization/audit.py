@@ -73,7 +73,7 @@ def record_event(
             details=details or {},
         ))
         db.commit()
-    except Exception:  # noqa: BLE001 - auditing must not break the request
+    except Exception:
         db.rollback()
         logger.exception("Failed to record audit event %s.", event_type)
 

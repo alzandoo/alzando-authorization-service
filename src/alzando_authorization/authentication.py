@@ -8,16 +8,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from alzando_authorization.config import settings
-from alzando_authorization.rate_limit import RateLimiter
+from alzando_authorization.email_verification import create_email_verification_challenge
 from alzando_authorization.models import (
     ApplicationService,
     AuthenticationAccount,
     AuthenticationGrant,
     utc_now,
 )
+from alzando_authorization.rate_limit import RateLimiter
 from alzando_authorization.schemas import LoginRequest, SignupRequest
 from alzando_authorization.service import ServiceError
-from alzando_authorization.email_verification import create_email_verification_challenge
 
 password_hasher = PasswordHasher()
 _DUMMY_PASSWORD_HASH = password_hasher.hash(secrets.token_urlsafe(32))

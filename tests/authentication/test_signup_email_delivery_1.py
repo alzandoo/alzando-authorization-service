@@ -5,7 +5,9 @@ the challenge creator to return a delivery payload. The API should return
 VERIFICATION_REQUIRED and enqueue that payload for the email sender.
 """
 
-from alzando_authorization import authentication, main as main_module
+from alzando_authorization import authentication
+from alzando_authorization import main as main_module
+
 
 def test_signup_queues_email_verification_delivery(
     api, enable_services, monkeypatch, application_header, password

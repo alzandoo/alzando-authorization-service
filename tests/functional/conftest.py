@@ -7,7 +7,6 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-
 logger = logging.getLogger("functional.http")
 PLATFORM_HEADERS = {"X-Dev-Application-Id": "alzando_platform"}
 _SENSITIVE_KEYS = {
@@ -100,9 +99,9 @@ def http_request():
             response = client.request(
                 method, path, headers=request_headers, json=json_body, data=data, auth=auth
             )
-        except Exception as exc:
+        except Exception:
             logger.exception(
-                "\n%s\nOUTPUT\nRequest raised %r", "-" * 24, exc
+                "\n%s\nOUTPUT\nRequest raised", "-" * 24
             )
             raise
 

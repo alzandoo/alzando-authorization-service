@@ -30,7 +30,7 @@ def register_application(db: Session, request: RegisterApplication) -> tuple[App
     )
     try:
         db.add(application)
-        db.flush()    
+        db.flush()
 
         for service in services:
             db.add(ApplicationService(
@@ -44,7 +44,7 @@ def register_application(db: Session, request: RegisterApplication) -> tuple[App
         client_scopes = default_scopes_for_services(requested)
         client, client_secret = add_application_client(
             db, application.application_id, client_scopes, request.client_type
-        )    
+        )
         db.commit()
     except IntegrityError as exc:
         db.rollback()

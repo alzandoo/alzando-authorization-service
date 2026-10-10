@@ -1,9 +1,9 @@
 from collections.abc import Generator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
-from fastapi.testclient import TestClient
 from argon2 import PasswordHasher
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -11,7 +11,6 @@ from sqlalchemy.pool import StaticPool
 from alzando_authorization import main as main_module
 from alzando_authorization.database import get_db
 from alzando_authorization.models import Application, ApplicationService, AuthenticationAccount, Base, Service
-
 
 APPLICATION_ID = "app_pytest"
 APPLICATION_HEADER = {"X-Dev-Application-Id": APPLICATION_ID}
@@ -91,7 +90,7 @@ class SQLiteTestSession(Session):
 def _normalize_sqlite_datetimes(_session, instance) -> None:
     for name, value in vars(instance).items():
         if isinstance(value, datetime) and value.tzinfo is None:
-            setattr(instance, name, value.replace(tzinfo=timezone.utc))
+            setattr(instance, name, value.replace(tzinfo=UTC))
 
 
 @pytest.fixture

@@ -1,5 +1,6 @@
-from argon2 import PasswordHasher
 from datetime import timedelta
+
+from argon2 import PasswordHasher
 
 from alzando_authorization.models import (
     AuthenticationAccount,

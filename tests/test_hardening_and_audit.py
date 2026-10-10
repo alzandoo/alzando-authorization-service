@@ -13,7 +13,6 @@ from alzando_authorization.models import (
     utc_now,
 )
 
-
 PLATFORM_HEADER = {"X-Dev-Application-Id": "alzando_platform"}
 
 

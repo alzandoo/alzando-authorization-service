@@ -1,10 +1,9 @@
 from collections.abc import Callable
 from functools import lru_cache
+from typing import Literal
 from uuid import UUID, uuid4
 
 import jwt
-from typing import Literal
-
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
@@ -12,59 +11,66 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from alzando_authorization.config import settings
-from alzando_authorization.clients import add_application_client, verify_client_secret
+from alzando_authorization.audit import audited, list_events, mask_identifier
 from alzando_authorization.authentication import (
     login as authenticate_user,
+)
+from alzando_authorization.authentication import (
     signup as create_authentication_account,
 )
-from alzando_authorization.password_recovery import (
-    complete_password_reset,
-    request_password_recovery,
-)
-from alzando_authorization.email_delivery import send_configured_email
-from alzando_authorization.audit import audited, list_events, mask_identifier
-from alzando_authorization.email_verification import resend_email_verification, verify_email
-from alzando_authorization.phone_verification import resend_phone_verification, verify_phone
-from alzando_authorization.rate_limit import RateLimiter, client_ip
-from alzando_authorization.scopes import SCOPE_TO_SERVICE
-from alzando_authorization.otp import request_otp, verify_otp
+from alzando_authorization.clients import verify_client_secret
+from alzando_authorization.config import settings
 from alzando_authorization.database import engine, get_db
+from alzando_authorization.email_delivery import send_configured_email
+from alzando_authorization.email_verification import resend_email_verification, verify_email
 from alzando_authorization.models import (
     Application,
     ApplicationClient,
     ApplicationService,
     AuthenticationAccount,
     AuthenticationGrant,
-    Service,
     UserSession,
     utc_now,
+)
+from alzando_authorization.otp import request_otp, verify_otp
+from alzando_authorization.password_recovery import (
+    complete_password_reset,
+    request_password_recovery,
+)
+from alzando_authorization.phone_verification import resend_phone_verification, verify_phone
+from alzando_authorization.rate_limit import RateLimiter, client_ip
+from alzando_authorization.registry import (
+    application_details,
+    list_services,
+    register_application,
+    replace_application_services,
+    update_application,
 )
 from alzando_authorization.schemas import (
     AuthorizationCheck,
     CreatePermission,
     CreateRole,
+    EmailVerificationRequest,
+    IssueUserTokenRequest,
+    LoginRequest,
+    MfaChallengeRequest,
+    MfaVerifyRequest,
+    OtpRequest,
+    OtpVerifyRequest,
+    PasswordRecoveryRequest,
+    PasswordResetRequest,
+    PhoneVerificationRequest,
+    RefreshUserTokenRequest,
     RegisterApplication,
     ReplaceApplicationServices,
     ReplacePermissions,
     ReplaceUserRoles,
-    LoginRequest,
-    PasswordRecoveryRequest,
-    PasswordResetRequest,
-    EmailVerificationRequest,
-    PhoneVerificationRequest,
     ResendVerificationRequest,
-    OtpRequest,
-    OtpVerifyRequest,
-    MfaChallengeRequest,
-    MfaVerifyRequest,
-    IssueUserTokenRequest,
-    RefreshUserTokenRequest,
     RevokeUserTokenRequest,
     SignupRequest,
     UpdateApplication,
 )
-from alzando_authorization.tokens import AccessTokenService
+from alzando_authorization.scopes import SCOPE_TO_SERVICE
 from alzando_authorization.service import (
     ServiceError,
     check_permission,
@@ -73,13 +79,7 @@ from alzando_authorization.service import (
     replace_role_permissions,
     replace_user_roles,
 )
-from alzando_authorization.registry import (
-    application_details,
-    list_services,
-    register_application,
-    replace_application_services,
-    update_application,
-)
+from alzando_authorization.tokens import AccessTokenService
 from alzando_authorization.user_tokens import (
     issue_user_tokens,
     refresh_user_tokens,

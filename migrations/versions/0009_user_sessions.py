@@ -4,8 +4,8 @@ Revision ID: 0009_user_sessions
 Revises: 0008_otp_challenges
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0009_user_sessions"
 down_revision = "0008_otp_challenges"

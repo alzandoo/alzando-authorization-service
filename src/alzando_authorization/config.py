@@ -128,7 +128,7 @@ class Settings(BaseSettings):
             ) from exc
 
         if not isinstance(private_key, rsa.RSAPrivateKey):
-            raise ValueError(
+            raise ValueError( # noqa: TRY004
                 "JWT_PRIVATE_KEY_FILE must contain an RSA private key "
                 "in production"
             )

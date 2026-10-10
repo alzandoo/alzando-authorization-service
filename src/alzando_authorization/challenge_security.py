@@ -17,5 +17,5 @@ def challenge_secret() -> bytes:
 
 
 def code_digest(secret: bytes, application_id: str, reference: str, code: str) -> str:
-    payload = f"{application_id}:{reference}:{code}".encode("utf-8")
+    payload = f"{application_id}:{reference}:{code}".encode()
     return hmac.new(secret, payload, hashlib.sha256).hexdigest()

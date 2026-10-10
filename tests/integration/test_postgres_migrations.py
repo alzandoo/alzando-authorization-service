@@ -10,7 +10,6 @@ from alembic.config import Config
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_SERVICE_CODES = {
     "SIGNUP",

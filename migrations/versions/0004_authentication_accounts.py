@@ -4,8 +4,8 @@ Revision ID: 0004_authentication_accounts
 Revises: 0003_application_registry
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0004_authentication_accounts"
 down_revision = "0003_application_registry"

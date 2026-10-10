@@ -31,7 +31,7 @@ def send_configured_email(recipient: str, subject: str, body: str) -> None:
             _send_via_brevo(recipient, subject, body)
         else:
             _send_via_smtp(recipient, subject, body)
-    except Exception as exc:
+    except Exception as exc:   # noqa: BLE001
         # Never log the recipient, message contents, or API credentials.
         logger.error("Configured email delivery failed (%s).", type(exc).__name__)
 

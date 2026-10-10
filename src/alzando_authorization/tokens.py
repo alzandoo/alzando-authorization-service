@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -46,7 +46,7 @@ class AccessTokenService:
         application_id: str,
         scopes: list[str],
     ) -> str:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         claims = {
             "iss": self.config.token_issuer,
@@ -76,7 +76,7 @@ class AccessTokenService:
         session_id: str,
         mfa_authenticated: bool,
     ) -> str:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         claims = {
             "iss": self.config.token_issuer,
