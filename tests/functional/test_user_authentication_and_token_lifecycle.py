@@ -292,7 +292,7 @@ def test_user_access_token_rejected_when_account_is_inactive(api, enable_service
     assert response.status_code == 401, response.text
     assert response.json()["status"] == "UNAUTHENTICATED"
 
-
+# APP-05 — Verify that an inactive application is denied access.
 def test_user_access_token_rejected_when_application_is_inactive(
     api, enable_services
 ):

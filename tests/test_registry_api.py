@@ -131,6 +131,7 @@ def test_registry_not_found_validation_and_platform_access(api):
     assert no_platform_context.status_code == 401
 
 # APP-02: Verify that duplicate application IDs are rejected with HTTP 409.
+# APP-04 — Verify that application registration rejects duplicate application IDs.
 def test_registration_rejects_duplicate_application_id(api, monkeypatch):
     client, _, _ = api
     # Patch the token generator to produce a duplicate application_id
@@ -148,3 +149,15 @@ def test_registration_rejects_duplicate_application_id(api, monkeypatch):
     )
     assert response.status_code == 409, response.text
     assert response.json()["status"] == "APPLICATION_REGISTRATION_FAILED"
+
+# APP-03: Verify that application registration rejects missing required fields.
+def test_registration_rejects_missing_required_fields(api):
+    client, _, _ = api
+
+    response = client.post(
+        "/api/v1/applications",
+        headers=PLATFORM_HEADER,
+        json={},
+    )
+
+    assert response.status_code == 422, response.text
