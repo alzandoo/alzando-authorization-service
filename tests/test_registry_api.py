@@ -1,3 +1,5 @@
+import alzando_authorization.registry as registry
+from types import SimpleNamespace
 from alzando_authorization.models import Application, ApplicationService
 
 
@@ -9,6 +11,7 @@ def test_service_catalogue_and_application_registration(api):
     catalogue = client.get("/api/v1/services", headers=PLATFORM_HEADER)
     assert catalogue.status_code == 200
     service_codes = {item["service_code"] for item in catalogue.json()["data"]["services"]}
+    # APP-01: Verify that the service catalogue contains all required services.
     assert {"SIGNUP", "LOGIN", "TOKEN", "AUTHORIZATION"} <= service_codes
 
     response = client.post(
@@ -126,3 +129,22 @@ def test_registry_not_found_validation_and_platform_access(api):
     assert unknown_service.status_code == 422
     assert unknown_service.json()["status"] == "UNKNOWN_SERVICE"
     assert no_platform_context.status_code == 401
+
+# APP-02: Verify that duplicate application IDs are rejected with HTTP 409.
+def test_registration_rejects_duplicate_application_id(api, monkeypatch):
+    client, sessions, _ = api
+    # Patch the token generator to produce a duplicate application_id
+    monkeypatch.setattr(registry, "secrets", SimpleNamespace(token_urlsafe=lambda n: "pytest"))
+    
+    response = client.post(
+        "/api/v1/applications",
+        headers=PLATFORM_HEADER,
+        json={
+            "name": "Duplicate ID App",
+            "application_type": "EXTERNAL",
+            "client_type": "CONFIDENTIAL",
+            "configuration": {"enabled_services": ["LOGIN"]},
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["status"] == "APPLICATION_REGISTRATION_FAILED"

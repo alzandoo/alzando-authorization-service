@@ -28,23 +28,23 @@ def register_application(db: Session, request: RegisterApplication) -> tuple[App
         owner=request.owner,
         status="ACTIVE",
     )
-    db.add(application)
-    db.flush()
-
-    for service in services:
-        db.add(ApplicationService(
-            application_id=application.application_id,
-            service_code=service.service_code,
-            enabled=service.service_code in requested,
-            configuration={},
-        ))
-
-    # Service configuration is enforced when a token is issued and again on API calls.
-    client_scopes = default_scopes_for_services(requested)
-    client, client_secret = add_application_client(
-        db, application.application_id, client_scopes, request.client_type
-    )
     try:
+        db.add(application)
+        db.flush()    
+
+        for service in services:
+            db.add(ApplicationService(
+                application_id=application.application_id,
+                service_code=service.service_code,
+                enabled=service.service_code in requested,
+                configuration={},
+            ))
+
+        # Service configuration is enforced when a token is issued and again on API calls.
+        client_scopes = default_scopes_for_services(requested)
+        client, client_secret = add_application_client(
+            db, application.application_id, client_scopes, request.client_type
+        )    
         db.commit()
     except IntegrityError as exc:
         db.rollback()
