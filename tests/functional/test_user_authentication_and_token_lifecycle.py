@@ -168,3 +168,188 @@ def test_signup_login_issue_refresh_and_revoke_user_tokens(api, enable_services,
         headers=headers,
     )
     assert refresh_revoked.status_code == 401, refresh_revoked.text
+
+
+def test_user_access_token_rejected_when_session_is_missing(api, enable_services):
+    """Reject a user access token when its database session is missing."""
+    from alzando_authorization.models import UserSession
+
+    client, sessions, _ = api
+    enable_services("SIGNUP", "LOGIN", "TOKEN")
+    headers = {"X-Dev-Application-Id": "app_pytest"}
+    password = "functional test password 2026"
+
+    signup = client.post(
+        "/api/v1/auth/signup",
+        headers=headers,
+        json={
+            "email": "missing.session@example.com",
+            "display_name": "Missing Session User",
+            "password": password,
+        },
+    )
+    assert signup.status_code == 201, signup.text
+
+    login = client.post(
+        "/api/v1/auth/login",
+        headers=headers,
+        json={
+            "method": "PASSWORD",
+            "identifier": "missing.session@example.com",
+            "password": password,
+        },
+    )
+    assert login.status_code == 200, login.text
+
+    token_response = client.post(
+        "/api/v1/tokens",
+        headers=headers,
+        json={
+            "authentication_reference":
+                login.json()["data"]["authentication_reference"]
+        },
+    )
+    assert token_response.status_code == 200, token_response.text
+    access_token = token_response.json()["data"]["access_token"]
+    session_id = token_response.json()["data"]["session_id"]
+
+    # Delete the database session without modifying the signed access token.
+    with sessions() as db:
+        session = db.get(UserSession, ("app_pytest", session_id))
+        assert session is not None
+        db.delete(session)
+        db.commit()
+
+    response = client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert response.status_code == 401, response.text
+    assert response.json()["status"] == "UNAUTHENTICATED"
+
+def test_user_access_token_rejected_when_account_is_inactive(api, enable_services):
+    """Reject a valid user access token when its account becomes inactive."""
+    from alzando_authorization.models import AuthenticationAccount
+
+    client, sessions, _ = api
+    enable_services("SIGNUP", "LOGIN", "TOKEN")
+    headers = {"X-Dev-Application-Id": "app_pytest"}
+    password = "functional test password 2026"
+    email = "inactive.account@example.com"
+
+    signup = client.post(
+        "/api/v1/auth/signup",
+        headers=headers,
+        json={
+            "email": email,
+            "display_name": "Inactive Account User",
+            "password": password,
+        },
+    )
+    assert signup.status_code == 201, signup.text
+
+    login = client.post(
+        "/api/v1/auth/login",
+        headers=headers,
+        json={
+            "method": "PASSWORD",
+            "identifier": email,
+            "password": password,
+        },
+    )
+    assert login.status_code == 200, login.text
+
+    token_response = client.post(
+        "/api/v1/tokens",
+        headers=headers,
+        json={
+            "authentication_reference":
+                login.json()["data"]["authentication_reference"]
+        },
+    )
+    assert token_response.status_code == 200, token_response.text
+
+    token_data = token_response.json()["data"]
+    access_token = token_data["access_token"]
+    account_reference = login.json()["data"]["account_reference"]
+
+    # Deactivate the account while keeping the access token and session intact.
+    with sessions() as db:
+        account = db.get(
+            AuthenticationAccount,
+            ("app_pytest", account_reference),
+        )
+        assert account is not None
+        account.status = "INACTIVE"
+        db.commit()
+
+    response = client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert response.status_code == 401, response.text
+    assert response.json()["status"] == "UNAUTHENTICATED"
+
+
+def test_user_access_token_rejected_when_application_is_inactive(
+    api, enable_services
+):
+    """Reject a valid user access token when its application becomes inactive."""
+    from alzando_authorization.models import Application
+
+    client, sessions, _ = api
+    enable_services("SIGNUP", "LOGIN", "TOKEN")
+    headers = {"X-Dev-Application-Id": "app_pytest"}
+    password = "functional test password 2026"
+    email = "inactive.application@example.com"
+
+    signup = client.post(
+        "/api/v1/auth/signup",
+        headers=headers,
+        json={
+            "email": email,
+            "display_name": "Inactive Application User",
+            "password": password,
+        },
+    )
+    assert signup.status_code == 201, signup.text
+
+    login = client.post(
+        "/api/v1/auth/login",
+        headers=headers,
+        json={
+            "method": "PASSWORD",
+            "identifier": email,
+            "password": password,
+        },
+    )
+    assert login.status_code == 200, login.text
+
+    token_response = client.post(
+        "/api/v1/tokens",
+        headers=headers,
+        json={
+            "authentication_reference":
+                login.json()["data"]["authentication_reference"]
+        },
+    )
+    assert token_response.status_code == 200, token_response.text
+
+    access_token = token_response.json()["data"]["access_token"]
+
+    # Deactivate the application while keeping the token and session intact.
+    with sessions() as db:
+        application = db.get(Application, "app_pytest")
+        assert application is not None
+        application.status = "INACTIVE"
+        db.commit()
+
+    response = client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert response.status_code == 401, response.text
+    assert response.json()["status"] == "UNAUTHENTICATED"
